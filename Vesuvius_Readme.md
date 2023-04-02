@@ -28,6 +28,10 @@ Each scroll is ~14_375 tiff files and each Tiff file is 122 Mb!
 Images are 560x560x1 pixels. (Single color image. reduces tensor depth)
 16 bit precision on the individual number.
 
+Data
+    - Train - 28.2 GB
+    - Test  - 6.26 GB
+
 Campfire scrolls are 104µm for a tutorial @ 8bits
 
 In here there are three folders:
