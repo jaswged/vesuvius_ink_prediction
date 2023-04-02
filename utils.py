@@ -4,8 +4,11 @@ import matplotlib.pyplot as plt
 import PIL.Image as Image
 from torchvision.transforms import ToTensor
 import torch.utils.data as data
+import logging
 
 THRESHOLD = 0.4  # Since our output has to be binary, we have to choose a threshold, say 40% confidence.
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 
 def rle(output):
@@ -37,13 +40,14 @@ def load_image(data_dir, filename: str = 'mask.png', viz:bool = False):
     assert os.path.exists(data_dir), f"data directory {data_dir} does not exist"
     filepath = os.path.join(data_dir, filename)
     assert os.path.exists(filepath), f"File path {filepath} does not exist"
+    log.info(f'Show image: {filepath}')
     _image = Image.open(filepath)
     if viz:
         plt.title(filepath)
         plt.imshow(_image)
         plt.show()
     _pt = ToTensor()(_image)
-    print(f"loaded image with shape {_pt.shape}")
+    log.debug(f"loaded image: {filepath} with shape {_pt.shape} and dtype: {_pt.dtype}")
     return _pt
 
 
