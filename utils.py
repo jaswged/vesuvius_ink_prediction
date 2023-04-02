@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -7,8 +9,10 @@ import torch.utils.data as data
 import logging
 
 THRESHOLD = 0.4  # Since our output has to be binary, we have to choose a threshold, say 40% confidence.
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+# log.setLevel(logging.DEBUG)
 
 
 def rle(output):
@@ -29,11 +33,11 @@ def rle(output):
 class FragmentDataset(data.Dataset):
     def __init__(self):
         # Half-size of papyrus patches we'll use as model inputs
-        buffer :int = 64,
+        buffer: int = 64
         # Number of slices in the z direction
-        z_dim : int = 16,
+        z_dim: int = 16
         # First slice in z direction
-        z_start: int = 25,
+        z_start: int = 25
 
 
 def load_image(data_dir, filename: str = 'mask.png', viz:bool = False):
