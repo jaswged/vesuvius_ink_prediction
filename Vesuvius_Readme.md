@@ -1,8 +1,12 @@
 # Vesuvius
 
-Detect ink in 3d scans of scrolls buried by the eruption that that covered Pompeii and Herculaneum
+Detect ink in 3d scans of ancient scrolls that were buried by the eruption that that covered Pompeii and Herculaneum
 
-volume-cartographer is how the virtual unwrapping has been done. [Link](https://github.com/educelab/volume-cartographer)
+As of 3/30
+`0.12` is a silver submission at this time.
+`0.48` is their sample submission to "beat" from InkId referenced below. As of 4/10 this is still gold
+
+## The Problem
 
 Turn it into a binary problem (ink vs no ink) for simplification, but isn't actually binary in real life
 
@@ -13,9 +17,20 @@ Full scroll could be a 4 class problem per voxel
 3. Empty Space
 4. Carbon/Shadows/Burn Marks
 
-As of 3/30
-`0.12` is a silver submission at this time.
-`0.48` is their sample submission to "beat" from InkId referenced below
+From Discord
+> Protip for training:
+> Treat the masks as biased indicators from experts. Model a more sparse (and smoother gradient than just 0/1 mask)
+> Then treat the mask prediction as another prediction task going from raw back into the original biased-expert mask-space.
+> Basically each label mask in there that looks more like conjecture than IR-backed has the potential to add noise to your predictions
+
+## TODO
+
+- [ ] Do EDA and plots to understand any correlation
+- [ ] Wrap up the fragments tightly as they would have been in a scroll. Choose different diameters for it.
+- [ ] Hu-Po's `eda.ipynb` file is a combination of example submission and the tutorial
+- [ ] Flip axis for training so it matches scrolls orientation.
+- [ ] Find a way to append several fragments together to create a "scroll" with layers that the network should work across.
+    - Would need to also update the scoring/masks for training.
 
 ## The Data
 
@@ -24,6 +39,8 @@ Data is stored in .tiff file with 8 micron resolution. It is a horizontal slice.
 A volume is a 3D picture made up of 3D pixel cubes called voxels
 
 Each scroll is ~14_375 tiff files and each Tiff file is 122 Mb!
+
+Fragment 2 is the bigger one.
 
 Images are 560x560x1 pixels. (Single color image. reduces tensor depth)
 16 bit precision on the individual number.
@@ -38,6 +55,12 @@ In here there are three folders:
     - raw: the raw X-ray photos of the scroll.
     - rec: the reconstructed 3D image volume (“rec” = “reconstructed”).
     - logs: log files during scanning and reconstruction.
+
+Surface reconstruction maps are stored in the .ppm files, not the .ply files. The ply's store the original 3D surface, but the PPM stores the 2D->3D map.
+`find . -type f -name "*.ply"`
+
+The fragments are represented as a .tif image stack. The image stack is an array of 16-bit grayscale images. 
+Each image represents a "slice" in the z-direction, going from below the papyrus, to above the papyrus.
 
 Files
 - [train/test]/[fragment_id]/surface_volume/[image_id].tif slices from the 3d x-ray surface volume. Each file contains a greyscale slice in the z-direction. Each fragment contains 65 slices. Combined this image stack gives us width * height * 65 number of voxels per fragment. You can expect two fragments in the hidden test set, which together are roughly the same size as a single training fragment. The sample slices available to download in the test folders are simply copied from training fragment one, but when you submit your notebook they will be substituted with the real test data.
@@ -79,6 +102,8 @@ The full scans are a couple hundred gbs each!
 
 ## Their Process
 
+volume-cartographer is how the virtual unwrapping has been done. [Link](https://github.com/educelab/volume-cartographer)
+
 Acquisition
 - Digitize the physical object
 Segmentation
@@ -99,13 +124,6 @@ Their `InkID` sample solution is a pretty basic CNN. It is based off of a geomet
 
 This model's code should be available on their [github](https://github.com/educelab/ink-id) page.
 
-## TODO
-
-- [ ] Do EDA and plots to understand any correlation
-- [ ] Wrap up the fragments tightly as they would have been in a scroll. Choose different diameters for it.
-- [ ] Hu-Po's `eda.ipynb` file is a combination of example submission and the tutorial
-- [ ] 
-
 ## Five People Question
 
 If you had 5 clones of yourself, what instruction would you give each of them?
@@ -117,7 +135,7 @@ If you had 5 clones of yourself, what instruction would you give each of them?
 5. Shake up the pipeline with new ideas. Not the existing geometric pipeline they use
 6. More UI tools for manipulating the data (ImageJ)
 
-# Papyrus
+## Papyrus
 
 Papyrus is a grassy reed that grows along the banks of the Nile in Egypt. It can grow up to 4.5 meters tall and 7.5cm thick. The tough outer rind is peeled away. The green inner pith is peeled or sliced into strips.
 
@@ -126,3 +144,11 @@ The sheets – called kollemata – are smoothed out with an ivory or seashell r
 The kollemata are then glued together with paste made of flour and water. Then the areas where they are joined are hammered smooth. This forms a long piece of papyrus, usually 15-30 feet, comprised of up to 20 kollemata.
 
 The Papyrus is rolled up around a dowel called an umbilicus. Portions of it are unrolled for writing. The first section, called the protokollon, is usually left blank. Text is written in columns with a quill and inkwell. Inks are made of varied substances.
+
+## U-Net
+
+U-net is a segmentation model built for medical x-rays. might be worth looking at for transfer learning
+
+[paperswithcode](https://paperswithcode.com/method/u-net)
+[Medium](https://medium.com/mlearning-ai/a-guide-to-using-u-nets-for-image-segmentation-4799410c8aef)
+[kaggle](https://www.kaggle.com/code/keegil/keras-u-net-starter-lb-0-277/notebook)
