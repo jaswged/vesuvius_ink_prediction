@@ -10,6 +10,13 @@ As of 3/30
 
 Turn it into a binary problem (ink vs no ink) for simplification, but isn't actually binary in real life
 
+Eg. So the input is an image stack so [h, w, #]  and outputs an image of where ink is. Image of 0s with 1s where ink is.
+
+Problem is telling the model the loss. The loss function for segmentation is not as straight forward as this number is wrong.
+    Use Cross-Entropy Loss. It is a probability mask function.
+    `torch.nn.CrossEntropyLoss(reduction='sum')`
+Each "pixel" gets its own vector of probabliltiy for each class ['% cat', '%couch', '%background']
+
 Full scroll could be a 4 class problem per voxel
 
 1. Papyrus with no Ink
@@ -31,6 +38,12 @@ From Discord
 - [ ] Flip axis for training so it matches scrolls orientation.
 - [ ] Find a way to append several fragments together to create a "scroll" with layers that the network should work across.
     - Would need to also update the scoring/masks for training.
+- [ ] [Nested K-Fold](https://www.baeldung.com/cs/k-fold-cross-validation)
+- [ ] 
+
+## Checkout
+- [ ] [UNet baseline](https://www.kaggle.com/code/yururoi/pytorch-unet-baseline-with-train-code)
+- [ ] [Monai](https://www.kaggle.com/code/clemchris/vesuvis-pytorch-monai)
 
 ## The Data
 
@@ -41,6 +54,8 @@ A volume is a 3D picture made up of 3D pixel cubes called voxels
 Each scroll is ~14_375 tiff files and each Tiff file is 122 Mb!
 
 Fragment 2 is the bigger one.
+
+Fragments is 5_249 x 7606 pixels per tiff file.
 
 Images are 560x560x1 pixels. (Single color image. reduces tensor depth)
 16 bit precision on the individual number.

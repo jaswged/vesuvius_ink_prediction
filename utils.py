@@ -9,7 +9,7 @@ import torch.utils.data as data
 import logging
 
 THRESHOLD = 0.4  # Since our output has to be binary, we have to choose a threshold, say 40% confidence.
-logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 log = logging.getLogger(__name__)
 # log.setLevel(logging.DEBUG)
@@ -40,7 +40,7 @@ class FragmentDataset(data.Dataset):
         z_start: int = 25
 
 
-def load_image(data_dir, filename: str = 'mask.png', viz:bool = False):
+def load_image(data_dir, filename: str = 'mask.png', viz: bool = False):
     assert os.path.exists(data_dir), f"data directory {data_dir} does not exist"
     filepath = os.path.join(data_dir, filename)
     assert os.path.exists(filepath), f"File path {filepath} does not exist"
@@ -51,7 +51,7 @@ def load_image(data_dir, filename: str = 'mask.png', viz:bool = False):
         plt.imshow(_image)
         plt.show()
     _pt = ToTensor()(_image)
-    log.debug(f"loaded image: {filepath} with shape {_pt.shape} and dtype: {_pt.dtype}")
+    log.info(f"loaded image: {filepath} with shape {_pt.shape} and dtype: {_pt.dtype}")
     return _pt
 
 
