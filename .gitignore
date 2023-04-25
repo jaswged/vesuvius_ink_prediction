@@ -6,6 +6,7 @@ __pycache__/
 
 data/
 .idea/
+wandb
 vesuvius-challenge-ink-detection.zip
 
 # C extensions

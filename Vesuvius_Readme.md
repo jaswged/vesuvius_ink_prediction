@@ -30,8 +30,14 @@ From Discord
 > Then treat the mask prediction as another prediction task going from raw back into the original biased-expert mask-space.
 > Basically each label mask in there that looks more like conjecture than IR-backed has the potential to add noise to your predictions
 
+From kaggle discussion
+
+> For sure you need to use slice, for example my best submission for score 0.63 uses only 7 slices
+> 2.5 seg notebook uses 6 slices : index 29 to 35
+
 ## TODO
 
+- [ ] Fix the lables with minor [erronious spots](https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/403113)
 - [ ] Do EDA and plots to understand any correlation
 - [ ] Wrap up the fragments tightly as they would have been in a scroll. Choose different diameters for it.
 - [ ] Hu-Po's `eda.ipynb` file is a combination of example submission and the tutorial
@@ -39,7 +45,8 @@ From Discord
 - [ ] Find a way to append several fragments together to create a "scroll" with layers that the network should work across.
     - Would need to also update the scoring/masks for training.
 - [ ] [Nested K-Fold](https://www.baeldung.com/cs/k-fold-cross-validation)
-- [ ] 
+- [ ] [Augmentations](https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/402408)
+- [ ] Train 2 models. one on each side of the halfway point. Then ensemble the results
 
 ## Checkout
 - [ ] [UNet baseline](https://www.kaggle.com/code/yururoi/pytorch-unet-baseline-with-train-code)
@@ -105,7 +112,7 @@ for i in `seq 6000 7250`; do wget --user=registeredusers --password=only http://
 Had to specify my wget location as powershell aliases to their own command
 
 ```powershell
-foreach($i in 6000..7250){wget --user=registeredusers --password=only http://dl.ash2txt.org/full-scrolls/Scroll1.volpkg/volumes/20230205180739/0$i.tif;}
+foreach($i in 6000..7250){G:\opt\scripts\wget.exe --user=registeredusers --password=only http://dl.ash2txt.org/full-scrolls/Scroll1.volpkg/volumes/20230205180739/0$i.tif;}
 ```
 
 Total dataset is 8 TB?!?!? They have 180TB lying in wait
