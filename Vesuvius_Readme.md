@@ -1,5 +1,7 @@
 # Vesuvius
 
+📜
+
 Detect ink in 3d scans of ancient scrolls that were buried by the eruption that that covered Pompeii and Herculaneum
 
 As of 3/30
@@ -37,22 +39,31 @@ From kaggle discussion
 
 ## TODO
 
-- [ ] Fix the lables with minor [erronious spots](https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/403113)
-- [ ] Do EDA and plots to understand any correlation
+- [ ] regularize/Normalize the data going into the model. So it becomes floats?
+- [ ] train different models to ensemble on different z layer depths
+- [ ] Save image every X epochs to visually compare performance against other models
+- [ ] Setup Kfold with the 5 different rects and 1 rect for test set to compare models outputs
+- [ ] add tqdm to create_data_loaders in lev implementations?
+- [ ] Increase batch size and/or train with all fragments. only used 2.7gb of gpu ram
+- [ ] Fix the labels with minor [erronious spots](https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/403113)
+- [ ] [Nested K-Fold](https://www.baeldung.com/cs/k-fold-cross-validation)
+- [ ] Add [Augmentations](https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/402408)
+- [ ] Lr Scheduling and dropout
+- [ ] class distribution in train and val masks?
+- [ ] ensemble 3 models together with xgboost? like icecube 🧊 lad?
+- [ ] try mini transformer based on paper and/or icecube lad ^
+- [ ] run the same model a couple times to try and find a sweet spot of how many slices to use on each side of middle.
+
+## Future Ideas
 - [ ] Wrap up the fragments tightly as they would have been in a scroll. Choose different diameters for it.
-- [ ] Hu-Po's `eda.ipynb` file is a combination of example submission and the tutorial
+- [ ] 
 - [ ] Flip axis for training so it matches scrolls orientation.
 - [ ] Find a way to append several fragments together to create a "scroll" with layers that the network should work across.
     - Would need to also update the scoring/masks for training.
-- [ ] [Nested K-Fold](https://www.baeldung.com/cs/k-fold-cross-validation)
-- [ ] [Augmentations](https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/402408)
-- [ ] Train 2 models. one on each side of the halfway point. Then ensemble the results
-
-## Checkout
-- [ ] [UNet baseline](https://www.kaggle.com/code/yururoi/pytorch-unet-baseline-with-train-code)
-- [ ] [Monai](https://www.kaggle.com/code/clemchris/vesuvis-pytorch-monai)
 
 ## The Data
+
+[Open Directory Link](http://dl.ash2txt.org/full-scrolls/Scroll1.volpkg/volumes/)
 
 Data is stored in .tiff file with 8 micron resolution. It is a horizontal slice.
 
@@ -117,8 +128,6 @@ foreach($i in 6000..7250){G:\opt\scripts\wget.exe --user=registeredusers --passw
 
 Total dataset is 8 TB?!?!? They have 180TB lying in wait
 Resolution is 4 and 8 microns from a synchrotron.
-
-Even the Fragments that were peeled off are actually multiple layers of papyri
 
 The full scans are a couple hundred gbs each!
 
