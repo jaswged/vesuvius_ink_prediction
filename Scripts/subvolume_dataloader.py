@@ -1,12 +1,14 @@
 import torch
 import numpy as np
-import pandas as pd
 from sklearn.metrics import roc_auc_score
 from torch import nn
 from torch import Tensor
+import torch.nn.functional as f
+from torchmetrics.functional import accuracy
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 import os
+from tqdm import tqdm
 from typing import List, Tuple
 import timm
 
@@ -59,18 +61,8 @@ class SubvolumeDataset(Dataset):
 
 def create_data_loader(batch_size: int, pixels: List[Tuple], dataset_kwargs: dict, shuffle: bool) -> DataLoader:
     dataset = SubvolumeDataset(pixels=pixels, **dataset_kwargs)
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)  # pin_memory=True
     return data_loader
-
-
-# From 3D notebook. has both train and valid pixels input and returns a tuple of dataloaders.
-def create_data_loaders(batch_size: int, train_pixels: List[Tuple], val_pixels: List[Tuple], dataset_kwargs: dict) -> Tuple[DataLoader]:
-    train_ds = SubvolumeDataset(pixels=train_pixels, **dataset_kwargs)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count())
-
-    val_ds = SubvolumeDataset(pixels=val_pixels, **dataset_kwargs)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
-    return train_loader, val_loader
 
 
 def dice_coef_torch(preds: Tensor, targets: Tensor, beta=0.5, smooth=1e-5) -> float:
@@ -78,15 +70,15 @@ def dice_coef_torch(preds: Tensor, targets: Tensor, beta=0.5, smooth=1e-5) -> fl
     https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/397288
     """
     # comment out if your model contains a sigmoid or equivalent activation layer. Ie You have already sigmoid(ed)
-    #preds = torch.sigmoid(preds)
+    # preds = torch.sigmoid(preds)
 
     # flatten label and prediction tensors
     preds = preds.view(-1).float()
     targets = targets.view(-1).float()
 
     y_true_count = targets.sum()
-    ctp = preds[targets==1].sum()
-    cfp = preds[targets==0].sum()
+    ctp = preds[targets == 1].sum()
+    cfp = preds[targets == 0].sum()
     beta_squared = beta * beta
 
     c_precision = ctp / (ctp + cfp + smooth)
@@ -96,63 +88,92 @@ def dice_coef_torch(preds: Tensor, targets: Tensor, beta=0.5, smooth=1e-5) -> fl
 
 
 # Like val but also has train_steps, optimizer, logger params
-def train_fn(train_steps: int, train_loader: DataLoader, model: nn.Module, loss_fn: nn.Module, optimizer, logger):
+def train_fn(train_steps: int, data_loader: DataLoader, model: nn.Module, loss_fn: nn.Module, optimizer, logger, epoch):
     model.train()  # sets model into train mode.
 
-    for i, (x, y) in enumerate(train_loader):  # x, y are (volume np.ndarray, inklabels: np.ndarray)
+    example_ct = 0  # number of examples seen
+    train_loss = 0
+    train_total = 0
+
+    for batch_idx, (x, y) in tqdm(enumerate(data_loader), desc='Batches', leave=False):  # x, y are (volume np.ndarray, inklabels: np.ndarray)
         x = x.to("cuda")
         y = y.to("cuda")
 
-        if i > train_steps:  # Only do so many train steps.
+        if batch_idx > train_steps:  # Only do so many train steps.
             break
 
         optimizer.zero_grad()  # Resets the gradients
-        yhat = model(x)  # Run the model predictions
-        loss = loss_fn(yhat, y)  # Calculate loss
+        y_hat = model(x)  # Run the model predictions
+
+        # Calculate loss
+        example_ct += len(x)  # Total number of examples the model has seen this epoch
+        loss = loss_fn(y_hat, y)
+        loss2 = f.binary_cross_entropy_with_logits(y_hat, y)
+        dice = dice_coef_torch(y_hat, y)
+# Todo do i need all of these fuckers?
+        acc = accuracy(y_hat, y, task='binary')
+        # acc2 = (y_hat.argmax(dim=-1) == y).float().mean()
+
+        train_loss += loss.item()
+        train_total += y_hat.size(0)  # is this always = to example_ct above?
+
+        # Backward pass ⬅
         loss.backward()
-        optimizer.step()  # update dem weights
-        logger.log({"train_loss": loss.item(), "train_dice": dice_coef_torch(yhat, y)})
-        try:  # .detach() Returns a new Tensor, detached from the current graph.
-            train_auc = roc_auc_score(y.detach().cpu().numpy(), yhat.detach().cpu().numpy())
-            logger.log({"train_auc": train_auc})
-        except ValueError:
-            pass
+
+        # Step with optimizer and update dem weights
+        optimizer.step()
+
+        # Report metrics every 25th batch/step
+        if batch_idx % 25 == 0:  # todo only calcuate the extra losses when its a 25 modulo run. save compute
+            train_auc = roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy())
+            logger.log({"train_loss": train_loss, "train_dice": dice, "train_auc": train_auc, 'train_accuracy': acc})
+
+    avg_loss = round((train_loss / train_total) * 100, 2)
+    print(avg_loss)
+    logger.log({"Train Loss": train_loss/train_total, "Train Accuracy": acc, "epoch": epoch})
+    # Todo return average losses?
+    return None
 
 
 @torch.no_grad()
-def val_fn(val_loader: DataLoader, model: nn.Module, loss_fn: nn.Module) -> dict:
+def val_fn(val_loader: DataLoader, model: nn.Module, loss_fn: nn.Module, logger) -> dict:
     run_loss = AverageCalc()
     model.eval()  # Sets the model into evaluation mode
     y_val = []
     yhat_val = []
+    test_loss = 0
+    test_total = 0
 
-    for i, (x, y) in enumerate(val_loader):
+    for batch_idx, (x, y) in tqdm(enumerate(val_loader), desc='Valid Batches', leave=False):
         x = x.to("cuda")
         y = y.to("cuda")
-        batch_size = x.shape[0]
 
-        yhat = model(x)  # .squeeze(1) 3D
-        loss = loss_fn(yhat, y)
+        y_hat = model(x)  # .squeeze(1) 3D
+        loss = loss_fn(y_hat, y)
+
+        test_loss += loss.item()
         run_loss.update(loss.item(), x.shape[0])
+        test_total += y_hat.size(0)
 
         y_val.append(y.cpu())
-        yhat_val.append(yhat.cpu())
+        yhat_val.append(y_hat.cpu())
 
     y_val = torch.cat(y_val)  # Concatenates the given sequence of seq tensors in the given dimension
     yhat_val = torch.cat(yhat_val)
-    df_val = pd.DataFrame({"y_val": y_val, "yhat_val": yhat_val})
 
     try:
         val_auc = roc_auc_score(y_val.numpy(), yhat_val.numpy())
     except ValueError:
         val_auc = np.nan
+    logger.log({"Test Loss": test_loss/test_total})  # todo compare to below run_loss.avg?
 
-    return {"val_loss": run_loss.avg, "val_dice": dice_coef_torch(yhat_val, y_val),
-            "val_auc": val_auc, "df_val": df_val}
+    # Val_dict is what is returned below v
+    logger.log({"val_loss": run_loss.avg, "val_dice": dice_coef_torch(yhat_val, y_val), "val_auc": val_auc})
+    return {"val_loss": run_loss.avg, "val_dice": dice_coef_torch(yhat_val, y_val), "val_auc": val_auc}
 
 
 @torch.no_grad()
-def generate_ink_pred(val_loader: DataLoader, model: nn.Module, val_pixels: List[Tuple[int, int]]) -> Tensor:
+def generate_ink_pred(val_loader: DataLoader, model: nn.Module, val_pixels) -> Tensor:
     model.eval()  # Sets the model into evaluation mode
     output = torch.zeros(IMAGE_SHAPE, dtype=torch.float32)
     for i, (x, y) in enumerate(val_loader):  # Todo add tqdm?
@@ -169,7 +190,7 @@ def generate_ink_pred(val_loader: DataLoader, model: nn.Module, val_pixels: List
 class InkClassifier(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.backbone = timm.create_model(config["model_name"], pretrained=True, in_chans=10, num_classes=0)  # only 10 in channels?
+        self.backbone = timm.create_model(config["model_name"], pretrained=True, in_chans=config['z_dim'], num_classes=0)
         self.backbone_dim = self.backbone(torch.rand(1, config["z_dim"], 2 * config["subvolume_size"], 2 * config["subvolume_size"])).shape[-1]
         self.classifier = nn.Linear(in_features=self.backbone_dim, out_features=1)
         self.sigmoid = nn.Sigmoid()
