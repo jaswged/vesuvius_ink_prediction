@@ -14,7 +14,6 @@ from warmup_scheduler import GradualWarmupScheduler
 from torch.cuda.amp import autocast, GradScaler
 from time import time
 import matplotlib.pyplot as plt
-
 import wandb
 from Scripts.segmentation_model import CustomDataset, CustomModel
 
@@ -22,22 +21,17 @@ from Scripts.segmentation_model import CustomDataset, CustomModel
 class CFG:
     # ============== comp exp name =============
     comp_name = 'vesuvius'
-
-    comp_dir_path = '../data/'
-    # comp_folder_name = 'vesuvius-challenge-ink-detection'
-    comp_dataset_path = comp_dir_path
-
     exp_name = 'vesuvius_2d_slide_exp002'
-
-    # ============== pred target =============
-    target_size = 1
+    comp_dir_path = '../data/'
+    comp_dataset_path = comp_dir_path
 
     # ============== model cfg =============
     model_name = 'Unet'
     backbone = 'efficientnet-b0'
     # backbone = 'se_resnext50_32x4d'
-
+    target_size = 1
     in_chans = 6  # 65
+
     # ============== training cfg =============
     size = 224  # Size to shrink image to
     tile_size = 224
@@ -262,6 +256,28 @@ def save_predictions_image(ink_pred: Tensor, inklabels, file_name: str) -> None:
     [axi.set_axis_off() for axi in axs.ravel()]  # Turn off the axes on all the sub plots
     plt.savefig(file_name, transparent=False)
     print("Graph has saved")
+
+
+def dice_coef_torch(preds: Tensor, targets: Tensor, beta=0.5, smooth=1e-5) -> float:
+    """
+    https://www.kaggle.com/competitions/vesuvius-challenge-ink-detection/discussion/397288
+    """
+    # comment out if your model contains a sigmoid or equivalent activation layer. Ie You have already sigmoid(ed)
+    # preds = torch.sigmoid(preds)
+
+    # flatten label and prediction tensors
+    preds = preds.view(-1).float()
+    targets = targets.view(-1).float()
+
+    y_true_count = targets.sum()
+    ctp = preds[targets == 1].sum()
+    cfp = preds[targets == 0].sum()
+    beta_squared = beta * beta
+
+    c_precision = ctp / (ctp + cfp + smooth)
+    c_recall = ctp / (y_true_count + smooth)
+    dice = (1 + beta_squared) * (c_precision * c_recall) / (beta_squared * c_precision + c_recall + smooth)
+    return dice
 # endregion
 
 
@@ -292,15 +308,11 @@ def get_scheduler(cfg, optimizer):
     scheduler = GradualWarmupSchedulerV2(optimizer, multiplier=10, total_epoch=1, after_scheduler=scheduler_cosine)
 
     return scheduler
-
-
-def scheduler_step(scheduler, avg_val_loss, epoch):
-    scheduler.step()
 # endregion
 
 
 # Torch Functions
-def train_fn(train_loader, model, criterion, optimizer, device, logger):
+def train_fn(train_loader, model, optimizer, device, logger):
     model.train()
 
     scaler = GradScaler(enabled=CFG.use_amp)
@@ -312,22 +324,24 @@ def train_fn(train_loader, model, criterion, optimizer, device, logger):
         batch_size = labels.size(0)
 
         with autocast(CFG.use_amp):
-            y_preds = model(images)
-            loss = criterion(y_preds, labels)
+            y_hat = model(images)
+            loss = BCELoss(y_hat, labels)  # Todo define this inside the model itself
+            acc = accuracy(y_hat, labels, task='binary')
+            dice = dice_coef_torch(y_hat, labels)
 
         losses.update(loss.item(), batch_size)
         scaler.scale(loss).backward()
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), CFG.max_grad_norm)
+        # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), CFG.max_grad_norm)
 
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
-    logger.log({"train_loss":  losses.avg, "epoch": epoch})
+    logger.log({"train_loss": losses.avg, "epoch": epoch, "train_dice": dice, 'train_accuracy': acc})
     return losses.avg
 
 
-def valid_fn(valid_loader, model, criterion, device, valid_xyxys, valid_mask_gt, logger):
+def valid_fn(valid_loader, model, device, valid_xyxys, valid_mask_gt, logger):
     mask_pred = np.zeros(valid_mask_gt.shape)
     mask_count = np.zeros(valid_mask_gt.shape)
 
@@ -340,16 +354,18 @@ def valid_fn(valid_loader, model, criterion, device, valid_xyxys, valid_mask_gt,
         batch_size = labels.size(0)
 
         with torch.no_grad():
-            y_preds = model(images)
-            loss = criterion(y_preds, labels)
+            y_hat = model(images)
+            loss = BCELoss(y_hat, labels)
+            acc = accuracy(y_hat, labels, task='binary')
+            dice = dice_coef_torch(y_hat, labels)
         losses.update(loss.item(), batch_size)
 
         # make whole mask
-        y_preds = torch.sigmoid(y_preds).to('cpu').numpy()
+        y_hat = torch.sigmoid(y_hat).to('cpu').numpy()
         start_idx = step*CFG.valid_batch_size
         end_idx = start_idx + batch_size
         for i, (x1, y1, x2, y2) in enumerate(valid_xyxys[start_idx:end_idx]):
-            mask_pred[y1:y2, x1:x2] += y_preds[i].squeeze(0)
+            mask_pred[y1:y2, x1:x2] += y_hat[i].squeeze(0)
             mask_count[y1:y2, x1:x2] += np.ones((CFG.tile_size, CFG.tile_size))
 
     print(f'mask_count_min: {mask_count.min()}')
@@ -409,10 +425,6 @@ def calc_fbeta(mask, mask_pred):
 def calc_cv(mask_gt, mask_pred):
     best_dice, best_th = calc_fbeta(mask_gt, mask_pred)
     return best_dice, best_th
-
-
-def criterion(y_pred, y_true):
-    return BCELoss(y_pred, y_true)
 # endregion
 
 
@@ -490,10 +502,9 @@ initial = time()
 for epoch in range(CFG.epochs):
     start_time = time()
 
-    avg_loss = train_fn(train_loader, model, criterion, optimizer, device, logger)
-    avg_val_loss, mask_pred = valid_fn(valid_loader, model, criterion, device, valid_xyxys, valid_mask_gt, logger)
-
-    scheduler_step(scheduler, avg_val_loss, epoch)
+    avg_loss = train_fn(train_loader, model, loss_fn, optimizer, device, logger)
+    avg_val_loss, mask_pred = valid_fn(valid_loader, model, loss_fn, device, valid_xyxys, valid_mask_gt, logger)
+    scheduler.step()
 
     best_dice, best_th = calc_cv(valid_mask_gt, mask_pred)
 
@@ -519,7 +530,7 @@ for epoch in range(CFG.epochs):
 final = time()
 total = final - initial
 print(f"Total epoch training took {total:.4} seconds or {total/60:.4} minutes")
-Logger.finish()
+logger.finish()
 
 print("Checkpoint notebook section")
 check_point = torch.load(CFG.model_dir + f'{CFG.model_name}_fold{fold}_{CFG.inf_weight}.pth', map_location=torch.device('cpu'))
