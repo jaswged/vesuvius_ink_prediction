@@ -65,6 +65,10 @@ From kaggle discussion
 
 [Open Directory Link](http://dl.ash2txt.org/full-scrolls/Scroll1.volpkg/volumes/)
 
+Smaller Datasets
+> They are there for both scrolls, e.g. in /full-scrolls/Scroll1.volpkg/volumes_masked/
+> We also posted small versions of the scrolls, e.g. at /full-scrolls/Scroll1.volpkg/volumes_small/
+
 Data is stored in .tiff file with 8 micron resolution. It is a horizontal slice.
 
 A volume is a 3D picture made up of 3D pixel cubes called voxels
