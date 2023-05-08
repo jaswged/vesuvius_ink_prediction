@@ -4,9 +4,8 @@ import segmentation_models_pytorch as smp
 
 
 class CustomDataset(Dataset):
-    def __init__(self, images, cfg, labels=None, transform=None):
+    def __init__(self, images, labels=None, transform=None):
         self.images = images
-        self.cfg = cfg
         self.labels = labels
         self.transform = transform
 
