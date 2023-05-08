@@ -18,17 +18,35 @@ import torch.utils.data as data
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torchvision.transforms import ToTensor
+import wandb
 
 sys.path.append(os.path.abspath("scripts"))
 
+# Setup WandB
+WANDB_API_KEY = 'local-a2cc501204f722abe273d32f382f7b7438873ad7'
+wandb.login(host='http://192.168.0.225:8080', key=WANDB_API_KEY)
+
 PREFIX = '../data/train/1/'
+TEST_PREFIX = '../data/test/a/'
+DATA_DIR = "../data"
+data_dir = 'data/train/1'
 BUF = 30  # Buffer size in x and y direction
 Z_START = 27  # First slice in the z direction to use
-Z_DIM = 8  # Number of slices in the z direction
+Z_DIM = 9  # Number of slices in the z direction
 TRAINING_STEPS = 3000
 LEARNING_RATE = 0.03
-BATCH_SIZE = 15
+BATCH_SIZE = 30
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model_to_load = None  # '../model_checkpoints/efficientnet_b0-subvolume_30-zstart_27-zdim_10-round_8-step_4000-thr_0.6.pt'
+THRESHOLD = 0.4
+rect = (1100, 3500, 1200, 950)
+
+# From 2.5d
+model_name = "efficientnet_b0"
+SEED = 1337
+EXPERIMENT_NAME = f"{model_name}-zdim_{config['z_dim']}-epoch_{config['epochs']}-step_{config['train_steps']}-thr_{config['threshold']}"
+
+
 torch.cuda.empty_cache()
 
 
@@ -94,7 +112,6 @@ def load_image(data_dir, filename: str = 'mask.png', viz: bool = False):
 
 
 if __name__ == "__main__":
-    data_dir = 'data/train/1'
     print("Load an image")
     # mask_im = load_image(data_dir=data_dir, viz=True)
     # mask_im = load_image(data_dir=PREFIX, viz=True)
@@ -103,7 +120,6 @@ if __name__ == "__main__":
               tqdm(sorted(glob.glob(PREFIX + "surface_volume/*.tif"))[Z_START:Z_START + Z_DIM])]
     image_stack = torch.stack([torch.from_numpy(image) for image in images], dim=0)  #.to(DEVICE)
 
-    rect = (1100, 3500, 1200, 950)
     # fig, ax = plt.subplots()
     # ax.imshow(label.cpu())
     # patch = patches.Rectangle((rect[0], rect[1]), rect[2], rect[3], linewidth=2, edgecolor='r', facecolor='none')
@@ -150,7 +166,7 @@ if __name__ == "__main__":
             optimizer.step()
             scheduler.step()
 
-    # print("Training over. show whats in the rect")
+    # print("Training over. show what's in the rect")
     # eval_dataset = SubvolumeDataset(image_stack, label, pixels_inside_rect)
     # eval_loader = data.DataLoader(eval_dataset, batch_size=BATCH_SIZE, shuffle=False)
     # output = torch.zeros_like(label).float()
@@ -166,7 +182,6 @@ if __name__ == "__main__":
     # ax2.imshow(label.cpu(), cmap='gray')
     # plt.show()
     #
-    THRESHOLD = 0.4
     # fig, (ax1, ax2) = plt.subplots(1, 2)
     # ax1.imshow(output.gt(THRESHOLD).cpu(), cmap='gray')
     # ax2.imshow(label.cpu(), cmap='gray')
@@ -180,7 +195,6 @@ if __name__ == "__main__":
 
     print("Do test inference on fragment 'a'")
     print(torch.cuda.memory_summary(device=None, abbreviated=False))
-    TEST_PREFIX = '../data/test/a/'
     test_mask = np.array(Image.open(TEST_PREFIX + "mask.png").convert('1'))
     test_images = [np.array(Image.open(filename), dtype=np.float16) / 65535.0 for filename in
               tqdm(sorted(glob.glob(TEST_PREFIX + "surface_volume/*.tif"))[Z_START:Z_START + Z_DIM])]
