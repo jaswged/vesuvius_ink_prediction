@@ -355,7 +355,7 @@ def valid_fn(valid_loader, model, device, valid_xyxys, valid_mask_gt, logger):
 
         with torch.no_grad():
             y_hat = model(images)
-            loss = BCELoss(y_hat, labels)
+            loss = BCELoss(y_hat, labels)¡
             acc = accuracy(y_hat, labels, task='binary')
             dice = dice_coef_torch(y_hat, labels)
         losses.update(loss.item(), batch_size)
