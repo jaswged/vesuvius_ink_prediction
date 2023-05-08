@@ -15,13 +15,14 @@ from torch.cuda.amp import autocast, GradScaler
 from time import time
 import matplotlib.pyplot as plt
 import wandb
+from torchmetrics.functional import accuracy
 from Scripts.segmentation_model import CustomDataset, CustomModel
 
 
 class CFG:
     # ============== comp exp name =============
     comp_name = 'vesuvius'
-    exp_name = 'vesuvius_2d_slide_exp002'
+    exp_name = 'vesuvius_2d_slide_exp_holdout_3'
     comp_dir_path = '../data/'
     comp_dataset_path = comp_dir_path
 
@@ -37,20 +38,20 @@ class CFG:
     tile_size = 224
     stride = tile_size // 2
 
-    train_batch_size = 32
+    train_batch_size = 46
     valid_batch_size = train_batch_size * 2
     use_amp = True
 
     scheduler = 'GradualWarmupSchedulerV2'
     # scheduler = 'CosineAnnealingLR'
-    epochs = 1  # 15 # 30
+    epochs = 30  # 15 # 30
 
     # adamW warmup
     warmup_factor = 10
     lr = 1e-4 / warmup_factor
 
     # ============== fold =============
-    valid_id = 1
+    valid_id = 3
 
     # objective_cv = 'binary'  # 'binary', 'multiclass', 'regression'
     # metrics = 'dice_coef'
@@ -62,8 +63,6 @@ class CFG:
     min_lr = 1e-6
     weight_decay = 1e-6
     max_grad_norm = 1000
-
-    print_freq = 50
     num_workers = 0
 
     seed = 1337
@@ -238,19 +237,19 @@ def save_predictions_image(ink_pred: Tensor, inklabels, file_name: str) -> None:
     axs[0][0].set_title("Labels")
 
     # Show the output images at different thresholds
-    axs[0][1].imshow(ink_pred.gt(0.4).cpu().numpy(), cmap="gray")
-    axs[0][1].set_title("@ .4")
+    axs[0][1].imshow(ink_pred >= 0.4, cmap="gray")
+    axs[0][1]. set_title("@ .4")
 
-    axs[0][2].imshow(ink_pred.gt(0.5).cpu().numpy(), cmap="gray")
+    axs[0][2].imshow(ink_pred >= 0.5, cmap="gray")
     axs[0][2].set_title("@ .5")
 
-    axs[1][0].imshow(ink_pred.gt(0.6).cpu().numpy(), cmap="gray")
+    axs[1][0].imshow(ink_pred >= 0.6, cmap="gray")
     axs[1][0].set_title("@ .6")
 
-    axs[1][1].imshow(ink_pred.gt(0.7).cpu().numpy(), cmap="gray")
+    axs[1][1].imshow(ink_pred >= 0.7, cmap="gray")
     axs[1][1].set_title("@ .7")
 
-    axs[1][2].imshow(ink_pred.gt(0.8).cpu().numpy(), cmap="gray")
+    axs[1][2].imshow(ink_pred >= 0.8, cmap="gray")
     axs[1][2].set_title("@ .8")
 
     [axi.set_axis_off() for axi in axs.ravel()]  # Turn off the axes on all the sub plots
@@ -502,9 +501,9 @@ initial = time()
 for epoch in range(CFG.epochs):
     start_time = time()
 
-    avg_loss = train_fn(train_loader, model, loss_fn, optimizer, device, logger)
-    avg_val_loss, mask_pred = valid_fn(valid_loader, model, loss_fn, device, valid_xyxys, valid_mask_gt, logger)
-    scheduler.step()
+    avg_loss = train_fn(train_loader, model, optimizer, device, logger)
+    avg_val_loss, mask_pred = valid_fn(valid_loader, model, device, valid_xyxys, valid_mask_gt, logger)
+    scheduler.step()  # get_last_lr()
 
     best_dice, best_th = calc_cv(valid_mask_gt, mask_pred)
 
@@ -523,6 +522,7 @@ for epoch in range(CFG.epochs):
         Logger.info(f'Epoch {epoch+1} - Save Best Score: {best_score:.4f} Model')
         Logger.info(f'Epoch {epoch+1} - Save Best Loss: {best_loss:.4f} Model')
 
+        # ToDO Save the model separate from the preds for smaller kaggle model upload.
         torch.save({'model': model.state_dict(),
                     'preds': mask_pred},
                    CFG.model_dir + f'{CFG.model_name}_fold{fold}_best.pth')
