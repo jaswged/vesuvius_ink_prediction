@@ -1,3 +1,4 @@
+import numpy as np
 import psutil
 from time import time
 import matplotlib.pyplot as plt
@@ -55,7 +56,7 @@ def show_mem_use():
     print(f"{mb_mem:6.2f} MB used")
 
 
-def save_predictions_image(ink_pred: Tensor, inklabels, file_name: str) -> None:
+def save_predictions_image(ink_pred: Tensor, inklabels=None, file_name: str = None) -> None:
     fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(30, 30))
     axs.flatten()
     if inklabels:
@@ -82,8 +83,11 @@ def save_predictions_image(ink_pred: Tensor, inklabels, file_name: str) -> None:
     axs[1][2].set_title("@ .8")
 
     [axi.set_axis_off() for axi in axs.ravel()]  # Turn off the axes on all the sub plots
-    plt.savefig(file_name, transparent=False)
-    print("Graph has saved")
+    if file_name:  # Save the image if passed in a file name
+        plt.savefig(file_name, transparent=False)
+        print(f"Saving image to {file_name}")
+    else:
+        plt.show()
 
 
 def dice_coef_torch(preds: Tensor, targets: Tensor, beta=0.5, smooth=1e-5) -> float:
@@ -107,6 +111,21 @@ def dice_coef_torch(preds: Tensor, targets: Tensor, beta=0.5, smooth=1e-5) -> fl
     c_recall = ctp / (y_true_count + smooth)
     dice = (1 + beta_squared) * (c_precision * c_recall) / (beta_squared * c_precision + c_recall + smooth)
     return dice
+
+
+# ref.: https://www.kaggle.com/stainsby/fast-tested-rle
+def rle_fast(img, threshold):
+    """
+    img: numpy array, 1 - mask, 0 - background
+    Returns run length as string formatted
+    """
+    pixels = img.flatten()
+    pixels = (pixels >= threshold) #.astype(int)
+
+    pixels = np.concatenate([[0], pixels, [0]])
+    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
+    runs[1::2] -= runs[::2]
+    return ' '.join(str(x) for x in runs)
 
 
 if __name__ == "__main__":
