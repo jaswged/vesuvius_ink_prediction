@@ -50,37 +50,59 @@ class Timer:
         self.stop()
 
 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
 def show_mem_use():
     process = psutil.Process()
     mb_mem = process.memory_info().rss / 1e6
     print(f"{mb_mem:6.2f} MB used")
 
 
-def save_predictions_image(ink_pred: Tensor, inklabels=None, file_name: str = None) -> None:
+def save_predictions_image(ink_pred, ink_labels=None, file_name: str = None) -> None:
     fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(30, 30))
     axs.flatten()
-    if inklabels:
-        axs[0][0].imshow(inklabels, cmap="gray")
+    if ink_labels is not None:
+        axs[0][0].imshow(ink_labels, cmap="gray")
         axs[0][0].set_title("Labels")
     else:
-        axs[0][1].imshow(ink_pred >= 0.35, cmap="gray")
-        axs[0][1]. set_title("@ .35")
+        axs[0][1].imshow(ink_pred >= 0.25, cmap="gray")
+        axs[0][1]. set_title("@ .25")
 
     # Show the output images at different thresholds
-    axs[0][1].imshow(ink_pred >= 0.4, cmap="gray")
-    axs[0][1]. set_title("@ .4")
+    axs[0][1].imshow(ink_pred >= 0.35, cmap="gray")
+    axs[0][1]. set_title("@ .35")
 
-    axs[0][2].imshow(ink_pred >= 0.5, cmap="gray")
-    axs[0][2].set_title("@ .5")
+    axs[0][2].imshow(ink_pred >= 0.45, cmap="gray")
+    axs[0][2].set_title("@ .45")
 
-    axs[1][0].imshow(ink_pred >= 0.6, cmap="gray")
-    axs[1][0].set_title("@ .6")
+    axs[1][0].imshow(ink_pred >= 0.55, cmap="gray")
+    axs[1][0].set_title("@ .55")
 
-    axs[1][1].imshow(ink_pred >= 0.7, cmap="gray")
-    axs[1][1].set_title("@ .7")
+    axs[1][1].imshow(ink_pred >= 0.65, cmap="gray")
+    axs[1][1].set_title("@ .65")
 
-    axs[1][2].imshow(ink_pred >= 0.8, cmap="gray")
-    axs[1][2].set_title("@ .8")
+    axs[1][2].imshow(ink_pred >= 0.75, cmap="gray")
+    axs[1][2].set_title("@ .75")
 
     [axi.set_axis_off() for axi in axs.ravel()]  # Turn off the axes on all the sub plots
     if file_name:  # Save the image if passed in a file name

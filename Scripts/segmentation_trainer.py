@@ -16,7 +16,7 @@ from time import time
 import matplotlib.pyplot as plt
 import wandb
 from torchmetrics.functional import accuracy
-from Scripts.segmentation_model import CustomDataset, CustomModel
+from Scripts.segmentation_model import ImageDataset, CustomModel
 
 
 class CFG:
@@ -354,7 +354,7 @@ def valid_fn(valid_loader, model, device, valid_xyxys, valid_mask_gt, logger):
 
         with torch.no_grad():
             y_hat = model(images)
-            loss = BCELoss(y_hat, labels)¡
+            loss = BCELoss(y_hat, labels)
             acc = accuracy(y_hat, labels, task='binary')
             dice = dice_coef_torch(y_hat, labels)
         losses.update(loss.item(), batch_size)
@@ -449,8 +449,8 @@ print("Load images")
 train_images, train_masks, valid_images, valid_masks, valid_xyxys = get_train_valid_dataset()
 
 print("Create datasets and loaders")
-train_dataset = CustomDataset(train_images, CFG, labels=train_masks, transform=get_transforms(data='train', cfg=CFG))
-valid_dataset = CustomDataset(valid_images, CFG, labels=valid_masks, transform=get_transforms(data='valid', cfg=CFG))
+train_dataset = ImageDataset(train_images, CFG, labels=train_masks, transform=get_transforms(data='train', cfg=CFG))
+valid_dataset = ImageDataset(valid_images, CFG, labels=valid_masks, transform=get_transforms(data='valid', cfg=CFG))
 
 train_loader = DataLoader(train_dataset,
                           batch_size=CFG.train_batch_size,
