@@ -6,6 +6,9 @@ import sys
 import gc
 import pandas as pd
 from PIL import Image
+
+from Scripts.FullyConvolutionalTransformer import FCT
+
 Image.MAX_IMAGE_PIXELS = 10000000000  # Ignore PIL warnings about large images
 from tqdm import tqdm
 from typing import List, Tuple
@@ -44,7 +47,7 @@ class CFG:
     backbone = 'efficientnet-b0'  # 'se_resnext50_32x4d'
     model_to_load = None  # '../model_checkpoints/vesuvius_notebook_clone_exp_holdout_3/models/Unet-zdim_6-epochs_30-step_15000-validId_3-epoch_9-dice_0.5195_dict.pt'
     target_size = 1
-    in_chans = 6  # 6  # 65
+    in_chans = 8  # 6
     pretrained = True
     inf_weight = 'best'
 
@@ -57,7 +60,7 @@ class CFG:
 
     train_batch_size = 40
     valid_batch_size = train_batch_size * 2
-    valid_id = 2
+    valid_id = 4
     use_amp = True
 
     scheduler = 'GradualWarmupSchedulerV2'  # 'CosineAnnealingLR'
@@ -76,8 +79,8 @@ class CFG:
 
     # ============== Experiment cfg =============
     # ToDO consolidate these names into one
-    exp_name = f'vesuvius_notebook_clone_exp_holdout_{valid_id}'
-    EXPERIMENT_NAME = f"{model_name}-zdim_{in_chans}-epochs_{epochs}-step_{train_steps}-validId_{valid_id}"
+    # exp_name = f'vesuvius_notebook_clone_exp_holdout_{valid_id}'
+    EXPERIMENT_NAME = f"{model_name}-zdim_{in_chans}-epochs_{epochs}-validId_{valid_id}"
 
     # ============== Inference cfg =============
     THRESHOLD = 0.3  # .52 score had a different value of .25
@@ -85,10 +88,10 @@ class CFG:
     # ============== set dataset paths =============
     comp_dir_path = '../'
     comp_dataset_path = comp_dir_path + 'data/'
-    outputs_path = comp_dir_path + f'model_checkpoints/{exp_name}/'
+    outputs_path = comp_dir_path + f'model_checkpoints/{EXPERIMENT_NAME}/'
 
     submission_dir = outputs_path + 'submissions/'
-    submission_path = submission_dir + f'submission_{exp_name}.csv'
+    submission_path = submission_dir + f'submission_{EXPERIMENT_NAME}.csv'
     model_dir = outputs_path + 'models/'
     figures_dir = outputs_path + 'figures/'
 
@@ -180,7 +183,7 @@ def get_train_valid_dataset():
     valid_labels = []
     valid_xyxys = []
 
-    for frag_id in range(1, 4):
+    for frag_id in range(3, 7):
         print(f"Load images for fragment: {frag_id}")
         image, label = read_image_and_labels(frag_id)
 
@@ -328,8 +331,9 @@ for i in range(1000):
 
 # Create model and setup params
 print('Create the model')
-# model = InkClassifier(config).to(DEVICE)
+# model = InkClassifier(config)
 model = build_model(CFG)
+# model = FCT()  todo debug it
 model.to(DEVICE)
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Number of model params is: {num_params:,}")
@@ -368,7 +372,7 @@ best_score = -1
 print(f"Train the model for {CFG.epochs} epochs")
 best_loss = np.inf
 best_model_state = None
-logger = wandb.init(project="Vesuvius", name=CFG.exp_name, config=config)
+logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
 initial = time()
 
 for epoch in range(CFG.epochs):
@@ -470,8 +474,8 @@ for epoch in range(CFG.epochs):
 
     end = time()
     total = end - start
-    logger.log({"epoch_loss": valid_losses.avg, "epoch_dice": best_dice})
-    print(f'Epoch {epoch+1:02d}/{config["epochs"]:02d} - avg_train_loss: {losses.avg:.4f}  avg_val_loss: {valid_losses.avg:.4f} time: {total/60:.3}s or {total/60:.3}min')
+    logger.log({"epoch_loss": valid_losses.avg, "epoch_dice": best_dice, "lr": scheduler.get_lr(), "best_th": best_th})
+    print(f'Epoch {epoch+1:02d}/{config["epochs"]:02d} - avg_train_loss: {losses.avg:.4f}  avg_val_loss: {valid_losses.avg:.4f} time: {total:.5}s or {total/60:.3} mins at lr {scheduler.get_lr()}')
     print(f'Epoch {epoch+1} - avgScore: {best_dice:.4f}')
 
 logger.finish()  # Close logger
@@ -484,6 +488,9 @@ print("Training over: Save final models")
 torch.save(model, CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_final.pt")
 torch.save(model.state_dict(), CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_dict_final.pt")
 
+# Save as Open Neural Network eXchange format
+torch.onnx.export(model, CFG.model_dir + "model.onnx")
+logger.save(CFG.model_dir + "model.onnx")
 # todo gc col and del
 
 ########################################################################

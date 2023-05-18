@@ -9,6 +9,7 @@ data/
 wandb
 vesuvius-challenge-ink-detection.zip
 other_gits/
+model_checkpoints/
 
 # C extensions
 *.so
