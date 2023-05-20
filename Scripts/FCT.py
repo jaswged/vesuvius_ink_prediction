@@ -272,7 +272,7 @@ class Block_encoder_with_skip(nn.Module):
         super().__init__()
         self.layernorm = nn.LayerNorm([in_channels, img_size, img_size])
         self.layer1 = nn.Sequential(
-            nn.Conv2d(4, in_channels, kernel_size=3, stride=1, padding="same"),
+            nn.Conv2d(1, in_channels, kernel_size=3, stride=1, padding="same"),  # had changed the 1 to a 4 previously
             nn.ReLU()
         )
         self.layer2 = nn.Sequential(
@@ -310,9 +310,11 @@ class FCT(nn.Module):
         # self.args = args
 
         # attention heads and filters per block
-        # att_heads = [2, 4, 8, 16, 8, 4, 2]  # 32, 16,
-        att_heads = [2, 2, 2, 2, 2, 2, 2]
+        att_heads = [2, 4, 8, 16, 8, 4, 2]  # 32, 16,
+        # att_heads = [2, 4, 8, 16, 32, 16, 8, 4, 2] raw
         filters = [32, 64, 128, 256, 128, 64, 32]  # 512, 256,
+        # filters = [32, 64, 128, 256, 512, 256, 128, 64, 32] raw
+
         # From official repo.
         # att_heads = [2, 2, 2, 2, 2, 2, 2, 2, 2]
         # filters = [8, 16, 32, 64, 128, 64, 32, 16, 8]
@@ -331,7 +333,8 @@ class FCT(nn.Module):
         # model
         # [N,1,img_size,img_size] => [N,filters[0],img_size // 2,img_size // 2]
         #                                   in_channels, out_channels, att_heads, dpr, img_size
-        self.block_1 = Block_encoder_without_skip(4, filters[0], att_heads[0], dpr[0], self.img_size)  # in chan was 1
+        # Custom shortened model
+        self.block_1 = Block_encoder_without_skip(1, filters[0], att_heads[0], dpr[0], self.img_size)  # in chan was 1
         # img_size divisor is same as att_heads?
         self.block_2 = Block_encoder_with_skip(filters[0], filters[1], att_heads[1], dpr[1], self.img_size // 2)
         self.block_3 = Block_encoder_with_skip(filters[1], filters[2], att_heads[2], dpr[2], self.img_size // 4)
@@ -346,6 +349,21 @@ class FCT(nn.Module):
         self.ds7 = DS_out(filters[4], 4, self.img_size // 8)  # todo check these sizes
         self.ds8 = DS_out(filters[5], 4, self.img_size // 4)
         self.ds9 = DS_out(filters[6], 4, self.img_size // 2)
+
+        # Raw. uncomment lines in forward method to match
+        # self.block_1 = Block_encoder_without_skip(1, filters[0], att_heads[0], dpr[0], self.img_size)
+        # self.block_2 = Block_encoder_with_skip(filters[0], filters[1], att_heads[1], dpr[1], self.img_size // 2)
+        # self.block_3 = Block_encoder_with_skip(filters[1], filters[2], att_heads[2], dpr[2], self.img_size // 4)
+        # self.block_4 = Block_encoder_with_skip(filters[2], filters[3], att_heads[3], dpr[3], self.img_size // 8)
+        # self.block_5 = Block_encoder_without_skip(filters[3], filters[4], att_heads[4], dpr[4], self.img_size // 16)
+        # self.block_6 = Block_decoder(filters[4], filters[5], att_heads[5], dpr[5], self.img_size // 32)
+        # self.block_7 = Block_decoder(filters[5], filters[6], att_heads[6], dpr[6], self.img_size // 16)
+        # self.block_8 = Block_decoder(filters[6], filters[7], att_heads[7], dpr[7], self.img_size // 8)
+        # self.block_9 = Block_decoder(filters[7], filters[8], att_heads[8], dpr[8], self.img_size // 4)
+        #
+        # self.ds7 = DS_out(filters[6], 4, self.img_size // 8)
+        # self.ds8 = DS_out(filters[7], 4, self.img_size // 4)
+        # self.ds9 = DS_out(filters[8], 4, self.img_size // 2)
 
     def forward(self, x):
         # Multi-scale input
