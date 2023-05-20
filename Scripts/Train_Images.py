@@ -7,7 +7,10 @@ import gc
 import pandas as pd
 from PIL import Image
 
-from Scripts.FullyConvolutionalTransformer import FCT
+from Scripts.CompactConvolutionalTransformer import CCT
+from Scripts.Compact_Transformer import CVT
+from Scripts.FCT import FCT
+from Scripts.FullyConvolutionalTransformer import FullyConvolutionalTransformer
 
 Image.MAX_IMAGE_PIXELS = 10000000000  # Ignore PIL warnings about large images
 from tqdm import tqdm
@@ -40,14 +43,14 @@ import segmentation_models_pytorch as smp
 class CFG:
     seed = 1337
     comp_name = 'vesuvius'
-    mode = "test"  # 'test'  # "train"
+    mode = "train"  # 'test'  # "train"
 
     # ============== model cfg =============
     model_name = 'Unet'
     backbone = 'efficientnet-b0'  # 'se_resnext50_32x4d'
     model_to_load = None  # '../model_checkpoints/vesuvius_notebook_clone_exp_holdout_3/models/Unet-zdim_6-epochs_30-step_15000-validId_3-epoch_9-dice_0.5195_dict.pt'
     target_size = 1
-    in_chans = 8  # 6
+    in_chans = 4  # 8  # 6
     pretrained = True
     inf_weight = 'best'
 
@@ -58,7 +61,7 @@ class CFG:
     tile_size = 224
     stride = tile_size // 2
 
-    train_batch_size = 40
+    train_batch_size = 1
     valid_batch_size = train_batch_size * 2
     valid_id = 4
     use_amp = True
@@ -332,11 +335,66 @@ for i in range(1000):
 # Create model and setup params
 print('Create the model')
 # model = InkClassifier(config)
-model = build_model(CFG)
-# model = FCT()  todo debug it
+# model = build_model(CFG)
+model2 = FullyConvolutionalTransformer()
+model = FCT(CFG.size, CFG.lr, CFG.weight_decay, CFG.min_lr)
+# model = CVT(img_size=CFG.size,  # 224
+#             embedding_dim=384,  # 16 * 16 * 3 = 768; 8 * 8 * 6
+#             n_input_channels=6,  # was 3 put to my 6/8?
+#             kernel_size=8,  # 16
+#             dropout=0.1,
+#             attention_dropout=0.1,
+#             stochastic_depth=0.1,
+#             num_layers=14,
+#             num_heads=6,
+#             mlp_ratio=4.0,
+#             num_classes=2,
+#             positional_embedding='learnable',
+#            )  # patch-size=4,   *args, **kwargs
+# model = CCT(
+#     img_size=224,
+#     embedding_dim=768,   # 16 * 16 * 3 = 768
+#     n_input_channels=4,  # 3
+#     n_conv_layers=1,
+#     kernel_size=7,
+#     stride=2,
+#     padding=3,
+#     pooling_kernel_size=3,
+#     pooling_stride=2,
+#     pooling_padding=1,
+#     dropout=0.1,
+#     attention_dropout=0.1,
+#     stochastic_depth=0.1,
+#     num_layers=6,  # 14,
+#     num_heads=4,  # 6,
+#     mlp_ratio=2.0,  # 4.0
+#     num_classes=1,
+#     positional_embedding='learnable'
+# )
+# Investigate. num_layers, num_heads and num_classes
 model.to(DEVICE)
+
+# Number of params.
+# FCTor:   1,945,214
+# FCT:    51,060,940
+# TrimFCT 27,694,924
+# Effnet:  6,252,909
+# CVt:   101,300,201   25,277,187
+# CCT:   101,836,035   181,342,212
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Number of model params is: {num_params:,}")
+
+# ################### TEMP try out 1 batch of model ###################
+for images, labels in train_loader:
+    images = images.to(DEVICE)
+    labels = labels.to(DEVICE)
+    break
+
+# returned = model(images)
+model2.to(DEVICE)
+returned2 = model2(images)
+
+# ################### Remove this ###################
 
 optimizer = AdamW(model.parameters(), lr=CFG.lr)
 # Setup Scheduler
@@ -372,7 +430,7 @@ best_score = -1
 print(f"Train the model for {CFG.epochs} epochs")
 best_loss = np.inf
 best_model_state = None
-logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
+# logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
 initial = time()
 
 for epoch in range(CFG.epochs):
