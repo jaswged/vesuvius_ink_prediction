@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 
-from Scripts.ACDC import get_acdc, convert_masks
+# from Scripts.ACDC import get_acdc, convert_masks
 
 
 class Attention(nn.Module):

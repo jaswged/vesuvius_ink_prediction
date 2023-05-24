@@ -3,14 +3,12 @@ from Scripts.segmentation_model import ImageDataset
 import os
 import sys
 import gc
-import pandas as pd
 from PIL import Image
 import copy
 Image.MAX_IMAGE_PIXELS = 10000000000  # Ignore PIL warnings about large images
 from tqdm import tqdm
 from typing import List, Tuple
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim import AdamW
 import random
@@ -25,10 +23,12 @@ import traceback
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from time import time
-import wandb
+# import wandb
 import math
 from albumentations import ImageOnlyTransform
-
+from einops import rearrange
+from einops.layers.torch import Rearrange
+from torch import nn, einsum
 import segmentation_models_pytorch as smp
 
 
@@ -219,11 +219,6 @@ torch.cuda.empty_cache()
 
 
 # ########################### Model definition ###########################
-from einops import rearrange
-from einops.layers.torch import Rearrange
-from torch import nn, einsum
-
-
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
