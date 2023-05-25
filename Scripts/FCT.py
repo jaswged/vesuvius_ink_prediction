@@ -298,7 +298,7 @@ class Block_encoder_with_skip(nn.Module):
 
 
 class FCT(nn.Module):
-    def __init__(self, img_size, lr, lr_factor, min_lr):
+    def __init__(self, img_size, in_channels, lr, lr_factor, min_lr):
         super().__init__()
 
         self.drp_out = 0.3
@@ -364,6 +364,10 @@ class FCT(nn.Module):
         # self.ds7 = DS_out(filters[6], 4, self.img_size // 8)
         # self.ds8 = DS_out(filters[7], 4, self.img_size // 4)
         # self.ds9 = DS_out(filters[8], 4, self.img_size // 2)
+
+        # Jason Condenser block
+        # depthwise_conv = nn.Conv2d(in_channels, out_channels=in_channels, kernel_size=kernel_size, padding=padding, groups=in_channels)
+
 
     def forward(self, x):
         # Multi-scale input
