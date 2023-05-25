@@ -72,7 +72,14 @@ depthwise_conv2 = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=3, stride
 
 # From example
 # nn.Conv3d(in_channels=1, out_channels=16, kernel_size=3, stride=1, padding=1),
+# Max-pooling (select the highest value), Min-pooling (select the lowest value), Average-pooling
 # nn.MaxPool3d(kernel_size=2, stride=2),
+
+# conv_Pool_layer = nn.Sequential(
+#     nn.Conv3d(3, 32, kernel_size=(3, 3, 3), padding=0),
+#     nn.LeakyReLU(),
+#     nn.MaxPool3d((2, 2, 2))
+
 
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Number of model params is: {num_params:,}")
