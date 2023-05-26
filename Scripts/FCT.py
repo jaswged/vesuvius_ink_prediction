@@ -298,8 +298,11 @@ class Block_encoder_with_skip(nn.Module):
 
 
 class FCT(nn.Module):
-    def __init__(self, img_size, in_channels, lr, lr_factor, min_lr):
+    def __init__(self, img_size, in_channels, out_channels, lr, lr_factor, min_lr):
         super().__init__()
+        # Jason Condenser blocks
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=3, groups=in_channels, bias=True, padding=1)
+        self.pointwise = nn.Conv2d(in_channels, 1, kernel_size=1, bias=True)
 
         self.drp_out = 0.3
         self.img_size = img_size
@@ -346,9 +349,10 @@ class FCT(nn.Module):
         self.block_8 = Block_decoder(filters[4], filters[5], att_heads[5], dpr[5], self.img_size // 8)
         self.block_9 = Block_decoder(filters[5], filters[6], att_heads[6], dpr[6], self.img_size // 4)
 
-        self.ds7 = DS_out(filters[4], 4, self.img_size // 8)  # todo check these sizes
-        self.ds8 = DS_out(filters[5], 4, self.img_size // 4)
-        self.ds9 = DS_out(filters[6], 4, self.img_size // 2)
+        # in_channels, out_channels, img_size
+        self.ds7 = DS_out(filters[4], out_channels, self.img_size // 8)  # todo check these sizes
+        self.ds8 = DS_out(filters[5], out_channels, self.img_size // 4)
+        self.ds9 = DS_out(filters[6], out_channels, self.img_size // 2)
 
         # Raw. uncomment lines in forward method to match
         # self.block_1 = Block_encoder_without_skip(1, filters[0], att_heads[0], dpr[0], self.img_size)
@@ -365,11 +369,12 @@ class FCT(nn.Module):
         # self.ds8 = DS_out(filters[7], 4, self.img_size // 4)
         # self.ds9 = DS_out(filters[8], 4, self.img_size // 2)
 
-        # Jason Condenser block
-        # depthwise_conv = nn.Conv2d(in_channels, out_channels=in_channels, kernel_size=kernel_size, padding=padding, groups=in_channels)
-
-
     def forward(self, x):
+        # Scale image to 1 channel
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        # todo nn.ReLU(), or gelu after? Here or max pooliong
+
         # Multi-scale input
         scale_img_2 = self.scale_img(x)  # x shape[batch_size,channel(1),224,224]  torch.Size([40, 6, 224, 224])
         scale_img_3 = self.scale_img(scale_img_2)  # shape[batch,1,56,56]
@@ -401,7 +406,6 @@ class FCT(nn.Module):
         x = self.block_9(x, skip1)  # now breaks here.
         # print(f"Block 9 out -> {list(x.size())}")
         skip9 = x
-
         out7 = self.ds7(skip7)
         # print(f"DS 7 out -> {list(out7.size())}")
         out8 = self.ds8(skip8)
