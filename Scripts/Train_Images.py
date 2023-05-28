@@ -6,10 +6,10 @@ import sys
 import gc
 import pandas as pd
 from PIL import Image
-
+import cv2
 from Scripts.CompactConvolutionalTransformer import CCT
 from Scripts.Compact_Transformer import CVT
-from Scripts.FCT import FCT
+from Scripts.FCT import FCT, init_weights
 from Scripts.FullyConvolutionalTransformer import FullyConvolutionalTransformer
 
 Image.MAX_IMAGE_PIXELS = 10000000000  # Ignore PIL warnings about large images
@@ -21,8 +21,8 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.optim import AdamW
 import random
 import torch
-from torch import nn
-import cv2
+import torch.nn.functional as F
+
 from torch import Tensor
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
@@ -46,23 +46,23 @@ class CFG:
     mode = "train"  # 'test'  # "train"
 
     # ============== model cfg =============
-    model_name = 'Unet'
+    model_name = 'FCT'  #'Unet'
     backbone = 'efficientnet-b0'  # 'se_resnext50_32x4d'
     model_to_load = None  # '../model_checkpoints/vesuvius_notebook_clone_exp_holdout_3/models/Unet-zdim_6-epochs_30-step_15000-validId_3-epoch_9-dice_0.5195_dict.pt'
     target_size = 1
-    in_chans = 4  # 8  # 6
+    in_chans = 6  # 8  # 6
     pretrained = True
     inf_weight = 'best'
 
     # ============== training cfg =============
-    epochs = 50  # 15 # 30
-    train_steps = 15000
+    epochs = 15  # 15 # 30 50
+    train_steps = 500
     size = 224  # Size to shrink image to
     tile_size = 224
     stride = tile_size // 2
 
-    train_batch_size = 1
-    valid_batch_size = train_batch_size * 2
+    train_batch_size = 24
+    valid_batch_size = train_batch_size  # * 2
     valid_id = 4
     use_amp = True
 
@@ -336,42 +336,9 @@ for i in range(1000):
 print('Create the model')
 # model = InkClassifier(config)
 # model = build_model(CFG)
-model2 = FullyConvolutionalTransformer()
-model = FCT(CFG.size, CFG.lr, CFG.weight_decay, CFG.min_lr)
-# model = CVT(img_size=CFG.size,  # 224
-#             embedding_dim=384,  # 16 * 16 * 3 = 768; 8 * 8 * 6
-#             n_input_channels=6,  # was 3 put to my 6/8?
-#             kernel_size=8,  # 16
-#             dropout=0.1,
-#             attention_dropout=0.1,
-#             stochastic_depth=0.1,
-#             num_layers=14,
-#             num_heads=6,
-#             mlp_ratio=4.0,
-#             num_classes=2,
-#             positional_embedding='learnable',
-#            )  # patch-size=4,   *args, **kwargs
-# model = CCT(
-#     img_size=224,
-#     embedding_dim=768,   # 16 * 16 * 3 = 768
-#     n_input_channels=4,  # 3
-#     n_conv_layers=1,
-#     kernel_size=7,
-#     stride=2,
-#     padding=3,
-#     pooling_kernel_size=3,
-#     pooling_stride=2,
-#     pooling_padding=1,
-#     dropout=0.1,
-#     attention_dropout=0.1,
-#     stochastic_depth=0.1,
-#     num_layers=6,  # 14,
-#     num_heads=4,  # 6,
-#     mlp_ratio=2.0,  # 4.0
-#     num_classes=1,
-#     positional_embedding='learnable'
-# )
-# Investigate. num_layers, num_heads and num_classes
+# model2 = FullyConvolutionalTransformer()
+model = FCT(CFG.size, CFG.in_chans, 1, CFG.lr, CFG.weight_decay, CFG.min_lr)
+# model.apply(init_weights)  # They did this in the example repos. Not sure why...
 model.to(DEVICE)
 
 # Number of params.
@@ -383,18 +350,9 @@ model.to(DEVICE)
 # CCT:   101,836,035   181,342,212
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Number of model params is: {num_params:,}")
-
-# ################### TEMP try out 1 batch of model ###################
-for images, labels in train_loader:
-    images = images.to(DEVICE)
-    labels = labels.to(DEVICE)
-    break
-
-# returned = model(images)
-model2.to(DEVICE)
-returned2 = model2(images)
-
-# ################### Remove this ###################
+parameters = filter(lambda p: p.requires_grad, model.parameters())
+parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
+print('Trainable FCT Parameters in FCT: %.3fM' % parameters)
 
 optimizer = AdamW(model.parameters(), lr=CFG.lr)
 # Setup Scheduler
@@ -430,7 +388,7 @@ best_score = -1
 print(f"Train the model for {CFG.epochs} epochs")
 best_loss = np.inf
 best_model_state = None
-# logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
+logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
 initial = time()
 
 for epoch in range(CFG.epochs):
@@ -444,13 +402,21 @@ for epoch in range(CFG.epochs):
     train_loss = 0
     train_total = 0
     for batch_idx, (x, y) in tqdm(enumerate(train_loader), total=len(train_loader), desc='Train Batches', leave=False):
+        # if batch_idx > CFG.train_steps:
+        #     print("Breaking early for train steps")
+        #     break
         x = x.to(DEVICE)
         y = y.to(DEVICE)
         batch_size = y.size(0)
 
         with autocast(CFG.use_amp):
             y_hat = model(x)   # Run the model predictions
-            loss = criterion(y_hat, y)  # Loss lambda
+            # FCT returns a tuple of predictions. Need to weigh these?
+            down1 = F.interpolate(y, CFG.size // 2)  # 1, 1, 112, 112
+            down2 = F.interpolate(y, CFG.size // 4)  # 1, 1, 56, 56
+            loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
+
+            # loss = criterion(y_hat, y)  # Loss lambda
 
         # Calculate the loss
         losses.update(loss.item(), batch_size)
@@ -468,7 +434,7 @@ for epoch in range(CFG.epochs):
         # Report metrics every 50th batch/step
         if batch_idx % 50 == 0:  # todo only calculate the extra losses when its a modulo run. save compute?
             # train_auc = roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy())
-            dice = dice_coef_torch(y_hat, y)
+            dice = dice_coef_torch(y_hat[2], y)
             logger.log({"train_loss": losses.avg, "train_loss_mine": train_loss/train_total, "train_dice": dice})  #, "train_auc": train_auc})
 
     print(f"Average training loss for this epoch was:{losses.avg} or mine: {train_loss/train_total}. In theory these number should match!")
@@ -491,16 +457,20 @@ for epoch in range(CFG.epochs):
 
         with torch.no_grad():
             y_hat = model(x)
-            loss = criterion(y_hat, y)
+            # FCT returns a tuple of predictions. Need to weigh these?
+            down1 = F.interpolate(y, CFG.size // 2)  # 1, 1, 112, 112
+            down2 = F.interpolate(y, CFG.size // 4)  # 1, 1, 56, 56
+            loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
+            # loss = criterion(y_hat, y)
 
         valid_losses.update(loss.item(), batch_size)
         valid_loss += loss.item()
         valid_total += batch_size
-        dice_coef = dice_coef_torch(y_hat, y)
+        dice_coef = dice_coef_torch(y_hat[2], y)
         dice_loss += dice_coef
 
         # make whole mask
-        y_hat = torch.sigmoid(y_hat).to('cpu').numpy()
+        y_hat = torch.sigmoid(y_hat[2]).to('cpu').numpy()  # Assigns over the tuple. Below for loop should be fine.
         start_idx = batch_idx * CFG.valid_batch_size
         end_idx = start_idx + batch_size
         for i, (x1, y1, x2, y2) in enumerate(valid_xyxys[start_idx:end_idx]):
@@ -539,7 +509,6 @@ for epoch in range(CFG.epochs):
 logger.finish()  # Close logger
 final = time()
 total = final - initial
-logger.finish()
 print(f"Total training took {total:.5} seconds or {total/60:.4} minutes for {CFG.epochs:02d} epochs")
 
 print("Training over: Save final models")
