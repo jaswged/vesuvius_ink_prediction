@@ -493,3 +493,14 @@ class FCT(nn.Module):
             dice_scores[c] = (2. * intersection + epsilon) / (sum_masks + epsilon)
 
         return dice_scores
+
+
+@torch.no_grad()
+def init_weights(m):
+    """
+    Initialize the weights
+    """
+    if isinstance(m, nn.Conv2d):
+        torch.nn.init.kaiming_normal_(m.weight)
+        if m.bias is not None:
+            torch.nn.init.zeros_(m.bias)
