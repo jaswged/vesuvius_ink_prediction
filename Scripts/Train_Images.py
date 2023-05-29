@@ -406,6 +406,8 @@ DiceLoss = smp.losses.DiceLoss(mode='binary')
 BCELoss = smp.losses.SoftBCEWithLogitsLoss()
 
 # Setup custom loss function as average between dice and Binary Cross entropy
+todo: cross-entropy loss can be expressed in terms of probability or logits). debug and check?
+  or add first 2 layers to full model?
 criterion = lambda y_pred, y_true: (BCELoss(y_pred, y_true) + DiceLoss(y_pred, y_true)) / 2
 
 if CFG.model_to_load:

@@ -245,8 +245,11 @@ class DS_out(nn.Module):
 
 
 class FullyConvolutionalTransformer(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels=6):
         super().__init__()
+        # Jason Condenser blocks
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=3, groups=in_channels, bias=True, padding=1)
+        self.pointwise = nn.Conv2d(in_channels, 1, kernel_size=1, bias=True)
 
         # attention heads and filters per block
         att_heads = [2, 2, 2, 2, 2, 2, 2, 2, 2]
@@ -280,11 +283,14 @@ class FullyConvolutionalTransformer(nn.Module):
         self.block_8 = Block_decoder(filters[6], filters[7], att_heads[7], dpr[7])
         self.block_9 = Block_decoder(filters[7], filters[8], att_heads[8], dpr[8])
 
-        self.ds7 = DS_out(filters[6], 4)
-        self.ds8 = DS_out(filters[7], 4)
-        self.ds9 = DS_out(filters[8], 4)
+        self.ds7 = DS_out(filters[6], 1)  # These were 4
+        self.ds8 = DS_out(filters[7], 1)
+        self.ds9 = DS_out(filters[8], 1)
 
     def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+
         # Multi-scale input  x.shape torch.Size([40, 8, 224, 224])
         # plt.imshow(x[0][:3, :, :].permute(1, 2, 0))
         scale_img_2 = self.scale_img(x)  # scale_img_2.shape torch.Size([40, 8, 112, 112])

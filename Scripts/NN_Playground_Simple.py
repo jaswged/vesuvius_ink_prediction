@@ -32,9 +32,11 @@ parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
 print('Trainable FCT Parameters in FCT: %.3fM' % parameters)
 
 # ########################### Call Model ###########################
-# full_output = full_model(images)
-# # RuntimeError: Given normalized_shape=[1], expected input with shape [*, 1], but got input of size[1, 224, 224, 6]
-# print(full_output.shape)
+full_output = full_model(images)  # Ask chat gpt about this error.
+# RuntimeError: Given normalized_shape=[1], expected input with shape [*, 1], but got input of size[1, 224, 224, 6]
+print(full_output[0].shape)
+print(full_output[1].shape)
+print(full_output[2].shape)
 
 fct_output = fct_model(images)
 # RuntimeError: Given normalized_shape=[1, 224, 224], expected input with shape [*, 1, 224, 224], but got input of size[1, 6, 224, 224]
