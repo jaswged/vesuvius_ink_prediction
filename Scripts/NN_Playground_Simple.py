@@ -4,13 +4,16 @@ from Scripts.FCT import FCT
 from Scripts.FullyConvolutionalTransformer import FullyConvolutionalTransformer
 import torch
 import torch.nn as nn
+import segmentation_models_pytorch as smp
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(DEVICE)
 
 # ########################### Setup Data ###########################
 images = torch.randn(1, 6, 224, 224)
+y = torch.randn(1, 1, 224, 224)
 images.to(DEVICE)
+y.to(DEVICE)
 
 # ########################### Model definition ###########################
 # Full: 1.945,214
@@ -32,7 +35,18 @@ parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
 print('Trainable FCT Parameters in FCT: %.3fM' % parameters)
 
 # ########################### Call Model ###########################
-full_output = full_model(images)  # Ask chat gpt about this error.
+y_pred = full_model(images)  # Ask chat gpt about this error.
+
+# Test loss function
+DiceLoss = smp.losses.DiceLoss(mode='binary')  # .99
+BCELoss = smp.losses.SoftBCEWithLogitsLoss()  # .967
+loss_fn = nn.BCELoss()  # From 2.5d .68
+logits_fn = nn.BCEWithLogitsLoss()  # .967
+criterion = lambda y_pred, y_true: (BCELoss(y_pred, y_true) + DiceLoss(y_pred, y_true)) / 2
+
+loss = criterion(y_pred, y)
+# loss = criterion(y_hat, y)  # Loss lambda
+
 # RuntimeError: Given normalized_shape=[1], expected input with shape [*, 1], but got input of size[1, 224, 224, 6]
 print(full_output[0].shape)
 print(full_output[1].shape)
