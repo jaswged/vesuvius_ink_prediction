@@ -162,14 +162,14 @@ class Block_encoder_bottleneck(nn.Module):
     def __init__(self, blk, in_channels, out_channels, att_heads, dpr):
         super().__init__()
         self.blk = blk
-        if ((self.blk=="first") or (self.blk=="bottleneck")):
+        if (self.blk == "first") or (self.blk == "bottleneck"):
             self.layernorm = nn.LayerNorm(in_channels, eps=1e-5)
             self.conv1 = nn.Conv2d(in_channels, out_channels, 3, 1, padding="same")
             self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, padding="same")
             self.trans = Transformer(out_channels, att_heads, dpr)
-        elif ((self.blk=="second") or (self.blk=="third") or (self.blk=="fourth")):
+        elif (self.blk == "second") or (self.blk == "third") or (self.blk == "fourth"):
             self.layernorm = nn.LayerNorm(in_channels, eps=1e-5)
-            self.conv1 = nn.Conv2d(1, in_channels, 3, 1, padding="same")
+            self.conv1 = nn.Conv2d(6, in_channels, 3, 1, padding="same")  # Todo 6 needs to be a param?
             self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, padding="same")
             self.conv3 = nn.Conv2d(out_channels, out_channels, 3, 1, padding="same")
             self.trans = Transformer(out_channels, att_heads, dpr)
@@ -193,7 +193,7 @@ class Block_encoder_bottleneck(nn.Module):
             x1 = F.relu(self.conv2(x1))
             x1 = F.relu(self.conv3(x1))
             x1 = F.dropout(x1, 0.3)
-            x1 = F.max_pool2d(x1, (2,2))
+            x1 = F.max_pool2d(x1, (2, 2))
             out = self.trans(x1)
             # with skip
         return out
@@ -253,7 +253,8 @@ class FullyConvolutionalTransformer(nn.Module):
 
         # attention heads and filters per block
         att_heads = [2, 2, 2, 2, 2, 2, 2, 2, 2]
-        filters = [8, 16, 32, 64, 128, 64, 32, 16, 8]
+        # filters = [8, 16, 32, 64, 128, 64, 32, 16, 8]  # Number of channels in lower blocks
+        filters = [12, 24, 48, 96, 192, 96, 48, 24, 12]  # Number of channels in lower blocks
 
         # number of blocks used in the model
         blocks = len(filters)
@@ -273,7 +274,7 @@ class FullyConvolutionalTransformer(nn.Module):
         self.scale_img = nn.AvgPool2d(2, 2)
 
         # model                                (blk, in_channels, out_channels, att_heads, dpr)
-        self.block_1 = Block_encoder_bottleneck("first", 1, filters[0], att_heads[0], dpr[0])  # wrong input channels?
+        self.block_1 = Block_encoder_bottleneck("first", in_channels, filters[0], att_heads[0], dpr[0])  # wrong input channels?
         self.block_2 = Block_encoder_bottleneck("second", filters[0], filters[1], att_heads[1], dpr[1])
         self.block_3 = Block_encoder_bottleneck("third", filters[1], filters[2], att_heads[2], dpr[2])
         self.block_4 = Block_encoder_bottleneck("fourth", filters[2], filters[3], att_heads[3], dpr[3])
@@ -288,8 +289,8 @@ class FullyConvolutionalTransformer(nn.Module):
         self.ds9 = DS_out(filters[8], 1)
 
     def forward(self, x):
-        x = self.depthwise(x)
-        x = self.pointwise(x)
+        # x = self.depthwise(x)
+        # x = self.pointwise(x)
 
         # Multi-scale input  x.shape torch.Size([40, 8, 224, 224])
         # plt.imshow(x[0][:3, :, :].permute(1, 2, 0))
@@ -315,22 +316,22 @@ class FullyConvolutionalTransformer(nn.Module):
         # print(f"Block 6 out -> {list(x.size())}")
         x = self.block_7(x, skip3)
         # print(f"Block 7 out -> {list(x.size())}")
-        skip7 = x
+        # skip7 = x
         x = self.block_8(x, skip2)
         # print(f"Block 8 out -> {list(x.size())}")
-        skip8 = x
+        # skip8 = x
         x = self.block_9(x, skip1)
         # print(f"Block 9 out -> {list(x.size())}")
         skip9 = x
 
-        out7 = self.ds7(skip7)
+        # out7 = self.ds7(skip7)
         # print(f"DS 7 out -> {list(out7.size())}")
-        out8 = self.ds8(skip8)
+        # out8 = self.ds8(skip8)
         # print(f"DS 8 out -> {list(out8.size())}")
         out9 = self.ds9(skip9)
         # print(f"DS 9 out -> {list(out9.size())}")
 
-        return out7, out8, out9
+        return out9  # out7, out8, out9
 
 
 def init_weights(m):
