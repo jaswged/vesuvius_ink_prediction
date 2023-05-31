@@ -22,6 +22,7 @@ from torch.optim import AdamW
 import random
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 
 from torch import Tensor
 from torch.optim import Adam
@@ -46,7 +47,7 @@ class CFG:
     mode = "train"  # 'test'  # "train"
 
     # ============== model cfg =============
-    model_name = 'FCT'  #'Unet'
+    model_name = 'full_bce_loss'  #'Unet'
     backbone = 'efficientnet-b0'  # 'se_resnext50_32x4d'
     model_to_load = None  # '../model_checkpoints/vesuvius_notebook_clone_exp_holdout_3/models/Unet-zdim_6-epochs_30-step_15000-validId_3-epoch_9-dice_0.5195_dict.pt'
     target_size = 1
@@ -55,15 +56,15 @@ class CFG:
     inf_weight = 'best'
 
     # ============== training cfg =============
-    epochs = 15  # 15 # 30 50
-    train_steps = 500
+    epochs = 8  # 15 # 30 50
+    train_steps = 1500
     size = 224  # Size to shrink image to
     tile_size = 224
     stride = tile_size // 2
 
-    train_batch_size = 24
+    train_batch_size = 1
     valid_batch_size = train_batch_size  # * 2
-    valid_id = 4
+    valid_id = 3
     use_amp = True
 
     scheduler = 'GradualWarmupSchedulerV2'  # 'CosineAnnealingLR'
@@ -233,7 +234,6 @@ def make_test_dataset(frag_id: str):
                              batch_size=CFG.valid_batch_size,
                              shuffle=False,
                              num_workers=CFG.num_workers, pin_memory=True, drop_last=False)
-
     return test_loader, xyxys
 
 
@@ -252,8 +252,7 @@ def make_dirs(cfg):
 ########################################################################
 # Setup WandB
 WANDB_API_KEY = 'local-a2cc501204f722abe273d32f382f7b7438873ad7'
-wandb.login(host='http://192.168.0.225:8080', key=WANDB_API_KEY)
-
+# wandb.login(host='http://192.168.0.225:8080', key=WANDB_API_KEY)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(DEVICE)
 
@@ -336,15 +335,15 @@ for i in range(1000):
 print('Create the model')
 # model = InkClassifier(config)
 # model = build_model(CFG)
-# model2 = FullyConvolutionalTransformer()
-model = FCT(CFG.size, CFG.in_chans, 1, CFG.lr, CFG.weight_decay, CFG.min_lr)
+model = FullyConvolutionalTransformer()
+# model = FCT(CFG.size, CFG.in_chans, 1, CFG.lr, CFG.weight_decay, CFG.min_lr)
 # model.apply(init_weights)  # They did this in the example repos. Not sure why...
 model.to(DEVICE)
 
 # Number of params.
 # FCTor:   1,945,214
 # FCT:    51,060,940
-# TrimFCT 27,694,924
+# TrimFCT 27,435,366
 # Effnet:  6,252,909
 # CVt:   101,300,201   25,277,187
 # CCT:   101,836,035   181,342,212
@@ -364,9 +363,8 @@ DiceLoss = smp.losses.DiceLoss(mode='binary')
 BCELoss = smp.losses.SoftBCEWithLogitsLoss()
 
 # Setup custom loss function as average between dice and Binary Cross entropy
-todo: cross-entropy loss can be expressed in terms of probability or logits). debug and check?
-  or add first 2 layers to full model?
-criterion = lambda y_pred, y_true: (BCELoss(y_pred, y_true) + DiceLoss(y_pred, y_true)) / 2
+# todo: cross-entropy loss can be expressed in terms of probability or logits). debug and check?
+criterion = DiceLoss  #lambda y_pred, y_true: (BCELoss(y_pred, y_true) + DiceLoss(y_pred, y_true)) / 2
 
 if CFG.model_to_load:
     print("Loading model from disk")
@@ -390,7 +388,7 @@ best_score = -1
 print(f"Train the model for {CFG.epochs} epochs")
 best_loss = np.inf
 best_model_state = None
-logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
+# logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
 initial = time()
 
 for epoch in range(CFG.epochs):
@@ -416,9 +414,13 @@ for epoch in range(CFG.epochs):
             # FCT returns a tuple of predictions. Need to weigh these?
             down1 = F.interpolate(y, CFG.size // 2)  # 1, 1, 112, 112
             down2 = F.interpolate(y, CFG.size // 4)  # 1, 1, 56, 56
-            loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
+            # loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
 
-            # loss = criterion(y_hat, y)  # Loss lambda
+            # torch.sigmoid(y_hat)  # From SO
+            # torch.round(torch.sigmoid(y_hat))
+            # ToDo check loss function preds
+
+            loss = criterion(y_hat, y)  # Loss lambda
 
         # Calculate the loss
         losses.update(loss.item(), batch_size)
@@ -436,8 +438,9 @@ for epoch in range(CFG.epochs):
         # Report metrics every 50th batch/step
         if batch_idx % 50 == 0:  # todo only calculate the extra losses when its a modulo run. save compute?
             # train_auc = roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy())
-            dice = dice_coef_torch(y_hat[2], y)
-            logger.log({"train_loss": losses.avg, "train_loss_mine": train_loss/train_total, "train_dice": dice})  #, "train_auc": train_auc})
+            dice = dice_coef_torch(y_hat, y)  # dice_coef_torch(y_hat[2], y)
+            # logger.log({"train_loss": losses.avg, "train_loss_mine": train_loss/train_total, "train_dice": dice})  #, "train_auc": train_auc})
+            print({"train_loss": losses.avg, "train_loss_mine": train_loss/train_total, "train_dice": dice})  #, "train_auc": train_auc})
 
     print(f"Average training loss for this epoch was:{losses.avg} or mine: {train_loss/train_total}. In theory these number should match!")
     # End Train loop
@@ -462,17 +465,17 @@ for epoch in range(CFG.epochs):
             # FCT returns a tuple of predictions. Need to weigh these?
             down1 = F.interpolate(y, CFG.size // 2)  # 1, 1, 112, 112
             down2 = F.interpolate(y, CFG.size // 4)  # 1, 1, 56, 56
-            loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
-            # loss = criterion(y_hat, y)
+            # loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
+            loss = criterion(y_hat, y)
 
         valid_losses.update(loss.item(), batch_size)
         valid_loss += loss.item()
         valid_total += batch_size
-        dice_coef = dice_coef_torch(y_hat[2], y)
+        dice_coef = dice_coef_torch(y_hat, y)  # y_hat[2]
         dice_loss += dice_coef
 
         # make whole mask
-        y_hat = torch.sigmoid(y_hat[2]).to('cpu').numpy()  # Assigns over the tuple. Below for loop should be fine.
+        y_hat = torch.sigmoid(y_hat).to('cpu').numpy()  # [2] Assigns over the tuple. Below for loop should be fine.
         start_idx = batch_idx * CFG.valid_batch_size
         end_idx = start_idx + batch_size
         for i, (x1, y1, x2, y2) in enumerate(valid_xyxys[start_idx:end_idx]):
@@ -518,8 +521,8 @@ torch.save(model, CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_final.pt")
 torch.save(model.state_dict(), CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_dict_final.pt")
 
 # Save as Open Neural Network eXchange format
-torch.onnx.export(model, CFG.model_dir + "model.onnx")
-logger.save(CFG.model_dir + "model.onnx")
+# torch.onnx.export(model, f"{CFG.model_dir}model.onnx")
+# logger.save(CFG.model_dir + "model.onnx")
 # todo gc col and del
 
 ########################################################################
