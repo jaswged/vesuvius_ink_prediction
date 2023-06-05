@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 import numpy as np
 import os
 import sys
@@ -7,56 +5,53 @@ import gc
 import pandas as pd
 from PIL import Image
 import cv2
-from Scripts.CompactConvolutionalTransformer import CCT
-from Scripts.Compact_Transformer import CVT
-from Scripts.FCT import FCT, init_weights
-from Scripts.FullyConvolutionalTransformer import FullyConvolutionalTransformer
-import torchmetrics
+import argparse
+from Scripts import LightningFCT
+import argparse
+import cv2
+import gc
+import numpy as np
+import os
+import pandas as pd
+import sys
+from PIL import Image
+
+from Scripts import LightningFCT
+
 Image.MAX_IMAGE_PIXELS = 10000000000  # Ignore PIL warnings about large images
 from tqdm import tqdm
-from typing import List, Tuple
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score
-from torch.cuda.amp import autocast, GradScaler
-from torch.optim import AdamW
-import random
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
-
-from torch import Tensor
-from torch.optim import Adam
-from torch.utils.data import Dataset, DataLoader
-import traceback
+import lightning as L
+from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
+from torch.utils.data import DataLoader
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from time import time
 import wandb
-from albumentations import ImageOnlyTransform
+from pytorch_lightning.loggers import WandbLogger
 
 sys.path.append(os.path.abspath("scripts"))
-from segmentation_model import ImageDataset, TestImageDataset, build_model, GradualWarmupSchedulerV2, calc_fbeta
-from utils import Timer, dice_coef_torch, rle_fast, save_predictions_image, AverageMeter
-
-import segmentation_models_pytorch as smp
+from segmentation_model import ImageDataset, TestImageDataset
+from utils import Timer, rle_fast, save_predictions_image
 
 
 class CFG:
     seed = 1337
     comp_name = 'vesuvius'
-    mode = "train"  # 'test'  # "train"
+    mode = "test"  # 'test'  # "train"
 
     # ============== model cfg =============
-    model_name = 'full_bce_loss'  #'Unet'
+    model_name = 'lightning_FCT'  #'Unet'
     backbone = 'efficientnet-b0'  # 'se_resnext50_32x4d'
-    model_to_load = None  # '../model_checkpoints/vesuvius_notebook_clone_exp_holdout_3/models/Unet-zdim_6-epochs_30-step_15000-validId_3-epoch_9-dice_0.5195_dict.pt'
+    model_to_load = None  # '../model_checkpoints/lightning_FCT-zdim_6-epochs_3-validId_3/models/lightning_FCT-zdim_6-epochs_3-validId_3_dict_final.pt'
     target_size = 1
     in_chans = 6  # 8  # 6
     pretrained = True
     inf_weight = 'best'
 
     # ============== training cfg =============
-    epochs = 30  # 15 # 30 50
+    epochs = 1  # 15 # 30 50
     train_steps = 15000
     size = 224  # Size to shrink image to
     tile_size = 224
@@ -64,11 +59,10 @@ class CFG:
 
     train_batch_size = 1
     valid_batch_size = train_batch_size  # * 2
-    valid_id = 3
-    use_amp = True
+    valid_id = 3  # 3-6
+    use_amp = True  # True  False
 
     scheduler = 'GradualWarmupSchedulerV2'  # 'CosineAnnealingLR'
-    min_lr = 1e-6
     weight_decay = 1e-6
     max_grad_norm = 1000
     num_workers = 0
@@ -79,13 +73,19 @@ class CFG:
 
     # adamW warmup
     warmup_factor = 10
-    lr = 1e-4 / warmup_factor
+    lr = 1e-4  # / warmup_factor
+
+    # From lightning args
+    lr_factor = 0.5
+    min_lr = 1e-6
+    lr_scheduler = 'ReduceLROnPlateau'
+    decay = 0.00
 
     # ============== Experiment cfg =============
-    EXPERIMENT_NAME = f"{model_name}-zdim_{in_chans}-epochs_{epochs}-validId_{valid_id}"
+    EXPERIMENT_NAME = f"{model_name}-zdim_{in_chans}-epochs_{epochs}-validId_{valid_id}-reduced-6chan"
 
     # ============== Inference cfg =============
-    THRESHOLD = 0.3  # .52 score had a different value of .25
+    THRESHOLD = 0.35  # .52 score had a different value of .25
 
     # ============== set dataset paths =============
     comp_dir_path = '../'
@@ -134,34 +134,9 @@ class CFG:
 
 
 # region Functions
-@torch.no_grad()
-def compute_dice(self, pred_y, y):
-    """
-    Computes the Dice coefficient for each class in the ACDC dataset.
-    Assumes binary masks with shape (num_masks, num_classes, height, width).
-    """
-    epsilon = 1e-6
-    num_masks = pred_y.shape[0]
-    num_classes = pred_y.shape[1]
-    dice_scores = torch.zeros((num_classes,), device=self.device)
-
-    for c in range(num_classes):
-        intersection = torch.sum(pred_y[:, c] * y[:, c])
-        sum_masks = torch.sum(pred_y[:, c]) + torch.sum(y[:, c])
-        dice_scores[c] = (2. * intersection + epsilon) / (sum_masks + epsilon)
-
-    return dice_scores
-
-
 def seed_all_the_things(seed=1337):
     os.environ['PYTHONHASHSEED'] = str(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    # when running on the CuDNN backend, two further options must be set
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    L.seed_everything(seed=seed)  # From pytorch lightning
 
 
 def read_image_and_labels(fragment_id: str, is_train: bool = True, mode: str = "train"):
@@ -261,6 +236,38 @@ def get_transforms(data, cfg):
 def make_dirs(cfg):
     for dir in [cfg.outputs_path, cfg.model_dir, cfg.figures_dir, cfg.submission_dir]:
         os.makedirs(dir, exist_ok=True)
+
+
+def get_lr_scheduler(CFG, optimizer):
+    if CFG.lr_scheduler == 'none':
+        return None
+    if CFG.lr_scheduler == 'ReduceLROnPlateau':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=CFG.lr_factor,
+            verbose=True,
+            threshold=1e-6,
+            patience=5,
+            min_lr=CFG.min_lr)
+        return scheduler
+    if CFG.lr_scheduler == 'CosineAnnealingWarmRestarts':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=500
+        )
+        return scheduler
+
+
+@torch.no_grad()
+def init_weights(m):
+    """
+    Initialize the weights
+    """
+    if isinstance(m, nn.Conv2d):
+        torch.nn.init.kaiming_normal_(m.weight)
+        if m.bias is not None:
+            torch.nn.init.zeros_(m.bias)
 # endregion
 
 
@@ -283,12 +290,13 @@ seed_all_the_things(CFG.seed)
 print("Lets do this!")
 make_dirs(CFG)
 
-config = {'model_name': CFG.model_name,
-          'backbone': CFG.backbone,
-          "epochs": CFG.epochs,
-          "seed": CFG.seed,
-          "z_dim": CFG.in_chans,
-          }
+config = {  # Config dict for Wandb
+    'model_name': CFG.model_name,
+    "epochs": CFG.epochs,
+    "seed": CFG.seed,
+    "z_dim": CFG.in_chans,
+    "valid_id": CFG.valid_id
+}
 
 ########################################################################
 # #############           Load up the data               ###############
@@ -319,242 +327,67 @@ valid_loader = DataLoader(valid_dataset,
 print(f"The length of train set is: {len(train_loader)}")
 print(f"The length of valid set is: {len(valid_loader)}")
 
-# Plot the dataset from the train notebook
-"""
-plot_dataset = CustomDataset(train_images, CFG, labels=train_masks)
-
-transform = CFG.train_aug_list
-transform = A.Compose([t for t in transform if not isinstance(t, (A.Normalize, ToTensorV2))])
-
-plot_count = 0
-for i in range(1000):
-    image, mask = plot_dataset[i]
-    data = transform(image=image, mask=mask)
-    aug_image = data['image']
-    aug_mask = data['mask']
-
-    if mask.sum() == 0:
-        continue
-
-    fig, axes = plt.subplots(1, 4, figsize=(15, 8))
-    axes[0].imshow(image[..., 0], cmap="gray")
-    axes[1].imshow(mask, cmap="gray")
-    axes[2].imshow(aug_image[..., 0], cmap="gray")
-    axes[3].imshow(aug_mask, cmap="gray")
-    
-    plt.savefig(CFG.figures_dir + f'aug_fold_{CFG.valid_id}_{plot_count}.png')
-
-    plot_count += 1
-    if plot_count == 5:
-        break
-"""
-
+########################################################################
+# #########         Create the model and Trainer             ###########
+########################################################################
 # Create model and setup params
 print('Create the model')
-# model = InkClassifier(config)
-# model = build_model(CFG)
-model = FullyConvolutionalTransformer()
-# model = FCT(CFG.size, CFG.in_chans, 1, CFG.lr, CFG.weight_decay, CFG.min_lr)
-# model.apply(init_weights)  # They did this in the example repos. Not sure why...
-model.to(DEVICE)
 
-# Number of params.
-# FCTor:   1,945,214
-# FCT:    51,060,940
-# TrimFCT 27,435,366
-# Effnet:  6,252,909
-# CVt:   101,300,201   25,277,187
-# CCT:   101,836,035   181,342,212
-num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"Number of model params is: {num_params:,}")
-parameters = filter(lambda p: p.requires_grad, model.parameters())
-parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
-print('Trainable FCT Parameters in FCT: %.3fM' % parameters)
-
-optimizer = AdamW(model.parameters(), lr=CFG.lr)
-# Setup Scheduler
-scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, CFG.epochs, eta_min=1e-7)
-scheduler = GradualWarmupSchedulerV2(optimizer, multiplier=10, total_epoch=1, after_scheduler=scheduler_cosine)
-
-# Loss Functions
-DiceLoss = smp.losses.DiceLoss(mode='binary')
-BCELoss = smp.losses.SoftBCEWithLogitsLoss()
-
-# Setup custom loss function as average between dice and Binary Cross entropy
-# todo: cross-entropy loss can be expressed in terms of probability or logits). debug and check?
-criterion = BCELoss  #lambda y_pred, y_true: (BCELoss(y_pred, y_true) + DiceLoss(y_pred, y_true)) / 2
+model = LightningFCT.FCT(CFG)
+# model.apply(init_weights)  # ToDo Has .zeros. maybe don't use if not learning?
 
 if CFG.model_to_load:
     print("Loading model from disk")
-    model.load_state_dict(torch.load(CFG.model_to_load), )  # loads model for inference or continue training
+    # parser = argparse.ArgumentParser(description='FCT for medical image')
+    # model = LightningFCT.FCT.load_from_checkpoint('lightning_logs/version_2/checkpoints/epoch=74-step=4500.ckpt',
+    #                                               args=parser.parse_args())
+    model.load_state_dict(torch.load(CFG.model_to_load))  # loads model for inference or continue training
 
-fragment_id = CFG.valid_id
+# FCT Default: 51,060,326
+# FCT with 12 based filters & 2 classes:  11,997,513
+# FCT with 2 attn heads:
+#
+num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"Number of Lightning model params is: {num_params:,}")
+parameters = filter(lambda p: p.requires_grad, model.parameters())
+parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
+print('Trainable Lightning FCT Parameters in FCT: %.3fM' % parameters)
 
-valid_labels = cv2.imread(CFG.comp_dataset_path + f"train/{fragment_id}/inklabels.png", 0)
-labels = cv2.imread(CFG.comp_dataset_path + f"train/{fragment_id}/inklabels.png", 0)
-valid_labels = valid_labels / 255
-pad0 = (CFG.tile_size - valid_labels.shape[0] % CFG.tile_size)
-pad1 = (CFG.tile_size - valid_labels.shape[1] % CFG.tile_size)
-valid_labels = np.pad(valid_labels, [(0, pad0), (0, pad1)], constant_values=0)
+precision = '16-mixed' if CFG.use_amp else 32  # Currently true
+lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-fold = CFG.valid_id
-best_score = -1
+# logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
+print("Create Trainer")
+wandb_logger = WandbLogger(project='Vesuvius', name=CFG.EXPERIMENT_NAME)
+trainer = L.Trainer(precision=precision, max_epochs=CFG.epochs, callbacks=[lr_monitor], logger=wandb_logger, log_every_n_steps=25)
 
-########################################################################
-# #############             Train the model              ###############
-########################################################################
-print(f"Train the model for {CFG.epochs} epochs")
-best_loss = np.inf
-best_model_state = None
-logger = wandb.init(project="Vesuvius", name=CFG.EXPERIMENT_NAME, config=config)
-initial = time()
+print("Fit the model with Lightning")
+with Timer("Fitting the model took"):
+    trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=valid_loader)
+    trainer.save_checkpoint(CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_final.ckpt")
+print("Training over.")
 
-for epoch in range(CFG.epochs):
-    start = time()
-    print(f"Begin epoch: {epoch+1:02d}/{config['epochs']:02d}")
-    model.train()
-    scaler = GradScaler(enabled=CFG.use_amp)
-    losses = AverageMeter()
-
-    # Training Loop
-    train_loss = 0
-    train_total = 0
-    for batch_idx, (x, y) in tqdm(enumerate(train_loader), total=len(train_loader), desc='Train Batches', leave=False):
-        # if batch_idx > CFG.train_steps:
-        #     print("Breaking early for train steps")
-        #     break
-        x = x.to(DEVICE)
-        y = y.to(DEVICE)
-        batch_size = y.size(0)
-
-        with autocast(CFG.use_amp):
-            y_hat = model(x)   # Run the model predictions
-            # FCT returns a tuple of predictions. Need to weigh these?
-            down1 = F.interpolate(y, CFG.size // 2)  # 1, 1, 112, 112
-            down2 = F.interpolate(y, CFG.size // 4)  # 1, 1, 56, 56
-            # loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
-
-            # torch.sigmoid(y_hat)  # From SO
-            # torch.round(torch.sigmoid(y_hat))
-            # ToDo check loss function preds
-            logit_fn = nn.BCEWithLogitsLoss()
-            bce_fn = nn.BCELoss()  # From thanos
-            loss = criterion(y_hat, y)  # Loss lambda
-            loss2 = bce_fn(y_hat, y)
-            y_pred = torch.argmax(y_hat, axis=1)
-            y_pred_onehot = F.one_hot(y_pred, 4).permute(0, 3, 1, 2)
-            dice = compute_dice(y_pred_onehot, y)
-            print("Muh dice")
-            print(dice)
-
-        # Calculate the loss
-        losses.update(loss.item(), batch_size)
-        train_loss += loss.item()
-        train_total += batch_size
-
-        # Backward pass
-        scaler.scale(loss).backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), CFG.max_grad_norm)
-
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()  # Resets the gradients
-
-        # Report metrics every 50th batch/step
-        if batch_idx % 50 == 0:  # todo only calculate the extra losses when its a modulo run. save compute?
-            # train_auc = roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy())
-            dice = dice_coef_torch(y_hat, y)  # dice_coef_torch(y_hat[2], y)
-            logger.log({"train_loss": losses.avg, "train_loss_mine": train_loss/train_total, "train_dice": dice})  #, "train_auc": train_auc})
-
-    print(f"Average training loss for this epoch was:{losses.avg} or mine: {train_loss/train_total}. In theory these number should match!")
-    # End Train loop
-
-    # Begin Validation Loop
-    model.eval()  # Sets the model into evaluation mode
-    mask_pred = np.zeros(valid_labels.shape)
-    mask_count = np.zeros(valid_labels.shape)
-
-    valid_loss = 0
-    dice_loss = 0
-    valid_total = 0
-    valid_losses = AverageMeter()
-
-    for batch_idx, (x, y) in tqdm(enumerate(valid_loader), total=len(valid_loader), desc='Valid Batches', leave=False):
-        x = x.to(DEVICE)
-        y = y.to(DEVICE)
-        batch_size = y.size(0)
-
-        with torch.no_grad():
-            y_hat = model(x)
-            # FCT returns a tuple of predictions. Need to weigh these?
-            down1 = F.interpolate(y, CFG.size // 2)  # 1, 1, 112, 112
-            down2 = F.interpolate(y, CFG.size // 4)  # 1, 1, 56, 56
-            # loss = (criterion(y_hat[2], y) * 0.57 + criterion(y_hat[1], down1) * 0.29 + criterion(y_hat[0], down2) * 0.14)
-            loss = criterion(y_hat, y)
-
-        valid_losses.update(loss.item(), batch_size)
-        valid_loss += loss.item()
-        valid_total += batch_size
-        dice_coef = dice_coef_torch(y_hat, y)  # y_hat[2]
-        dice_loss += dice_coef
-
-        # make whole mask
-        y_hat = torch.sigmoid(y_hat).to('cpu').numpy()  # [2] Assigns over the tuple. Below for loop should be fine.
-        start_idx = batch_idx * CFG.valid_batch_size
-        end_idx = start_idx + batch_size
-        for i, (x1, y1, x2, y2) in enumerate(valid_xyxys[start_idx:end_idx]):
-            mask_pred[y1:y2, x1:x2] += y_hat[i].squeeze(0)
-            mask_count[y1:y2, x1:x2] += np.ones((CFG.tile_size, CFG.tile_size))
-
-        if batch_idx % 50 == 0:
-            logger.log({"val_loss": valid_losses.avg, "val_loss_mine": valid_loss/valid_total, "val_dice": dice_loss/valid_total})
-
-    mask_pred /= mask_count
-    scheduler.step(epoch)
-
-    # Calculate CV for model epoch comparisons.
-    best_dice, best_th = calc_fbeta(valid_labels, mask_pred)
-    print(f'best_th: {best_th}, fbeta: {best_dice}')
-
-    print("Save image of this epochs validation.")
-    # TODO every nth epoch save out an image of our preds
-    save_predictions_image(mask_pred, ink_labels=labels, file_name=f'{CFG.figures_dir}/validation_step_epoch_{epoch}_preds_best_th_{best_th}.png')
-
-    if best_dice > best_score:
-        best_loss = valid_losses.avg
-        best_score = best_dice
-        print(f"Epoch {epoch:02d} has better dice score: {dice_loss:.4f}. Saving model checkpoint")
-        epoch_name = f"{CFG.EXPERIMENT_NAME}-epoch_{epoch}-dice_{best_score:.4f}"
-        best_model_state = deepcopy(model.state_dict())
-        torch.save(model.state_dict(), f"{CFG.model_dir}/{epoch_name}_dict.pt")
-        torch.save(model, f"{CFG.model_dir}/{epoch_name}.pt")
-
-    end = time()
-    total = end - start
-    logger.log({"epoch_loss": valid_losses.avg, "epoch_dice": best_dice, "lr": scheduler.get_lr(), "best_th": best_th})
-    print(f'Epoch {epoch+1:02d}/{config["epochs"]:02d} - avg_train_loss: {losses.avg:.4f}  avg_val_loss: {valid_losses.avg:.4f} time: {total:.5}s or {total/60:.3} mins at lr {scheduler.get_lr()}')
-    print(f'Epoch {epoch+1} - avgScore: {best_dice:.4f}')
-
-logger.finish()  # Close logger
-final = time()
-total = final - initial
-print(f"Total training took {total:.5} seconds or {total/60:.4} minutes for {CFG.epochs:02d} epochs")
+print("Do image generation here to gauge if model learned anything!")
 
 print("Training over: Save final models")
 torch.save(model, CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_final.pt")
 torch.save(model.state_dict(), CFG.model_dir + f"{CFG.EXPERIMENT_NAME}_dict_final.pt")
-
-# Save as Open Neural Network eXchange format
-# torch.onnx.export(model, f"{CFG.model_dir}model.onnx")
-# logger.save(CFG.model_dir + "model.onnx")
-# todo gc col and del
 
 ########################################################################
 # #############           Generate Validation            ###############
 ########################################################################
 # region Validation Prediction
 print("Save image of validation predictions")
+
+valid_labels = cv2.imread(CFG.comp_dataset_path + f"train/{CFG.valid_id}/inklabels.png", 0)
+# labels = cv2.imread(CFG.comp_dataset_path + f"train/{fragment_id}/inklabels.png", 0)
+valid_labels = valid_labels / 255
+pad0 = (CFG.tile_size - valid_labels.shape[0] % CFG.tile_size)
+pad1 = (CFG.tile_size - valid_labels.shape[1] % CFG.tile_size)
+valid_labels = np.pad(valid_labels, [(0, pad0), (0, pad1)], constant_values=0)
+
 model.eval()  # Sets the model into evaluation mode
+model.to(DEVICE)
 mask_pred = np.zeros(valid_labels.shape, dtype=np.float32)
 mask_count = np.zeros(valid_labels.shape, dtype=np.float32)
 for batch_idx, (x, y) in tqdm(enumerate(valid_loader), total=len(valid_loader), desc='Inference Batches', leave=False):
@@ -563,8 +396,8 @@ for batch_idx, (x, y) in tqdm(enumerate(valid_loader), total=len(valid_loader), 
 
     with torch.no_grad():
         y_hat = model(x)
-
-    y_preds = torch.sigmoid(y_hat).to('cpu').numpy()
+    # y_preds = torch.sigmoid(y_hat[2]).to('cpu').numpy()  # Might not need sigmoid with this model? todo
+    y_preds = y_hat[2].to('cpu').numpy()  # Might not need sigmoid with this model? todo
     start_idx = batch_idx * CFG.valid_batch_size
     end_idx = start_idx + batch_size
 
@@ -575,14 +408,17 @@ for batch_idx, (x, y) in tqdm(enumerate(valid_loader), total=len(valid_loader), 
 save_predictions_image(mask_pred, file_name=f'{CFG.figures_dir}/{CFG.EXPERIMENT_NAME}_preds.png')  # plt.imshow(mask_pred); plt.savefig(f'{CFG.figures_dir}/{CFG.EXPERIMENT_NAME}_preds.png')
 # endregion
 
-# todo gc col and del
+# Garbage Collect before inference
+del train_loader, train_dataset
+gc.collect()
+torch.cuda.empty_cache()
 
 ########################################################################
 # #############             Final Inference              ###############
 ########################################################################
 # region Final Inference
 print("Do Inference")
-print("Would do the model ensemble here!")
+print("Would do the model ensemble here in final submission!")
 
 if CFG.mode == 'test':
     print("Below is straight from the .41 submission notebook!")
@@ -624,7 +460,6 @@ if CFG.mode == 'test':
                     mask_pred[y1:y2, x1:x2] += y_preds[i].reshape(mask_pred[y1:y2, x1:x2].shape)  # From TTA
                     mask_count[y1:y2, x1:x2] += np.ones((CFG.tile_size, CFG.tile_size))
 
-        print(f'mask_count_min: {mask_count.min()}')
         mask_pred /= mask_count
 
         # Setup plot for the graphs
