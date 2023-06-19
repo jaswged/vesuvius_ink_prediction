@@ -12,7 +12,7 @@ from tqdm import tqdm
 from typing import List, Tuple
 import timm
 
-IMAGE_SHAPE = 8181, 6330
+IMAGE_SHAPE = 14830, 9506  # 1: 8181, 6330    3: 7606, 5249
 
 
 class AverageCalc:  # Similar to 2-5d `AverageMeter` method
@@ -36,6 +36,25 @@ class AverageCalc:  # Similar to 2-5d `AverageMeter` method
         self.avg = self.sum/self.count
 
 
+class SubvolumeDatasetTest(Dataset):
+    def __init__(self, volume: np.ndarray, pixels: List[Tuple], subvolume_size: int):
+        self.volume = volume
+        # pixels in test mask
+        self.pixels = pixels
+        self.subvolume_size = subvolume_size
+
+    def __len__(self):
+        return len(self.pixels)
+
+    def __getitem__(self, idx):
+        y, x = self.pixels[idx]
+        subvolume = self.volume[:,
+                    y - self.subvolume_size: y + self.subvolume_size,
+                    x - self.subvolume_size: x + self.subvolume_size]
+        subvolume = torch.from_numpy(subvolume).to(torch.float32)
+        return subvolume
+
+
 class SubvolumeDataset(Dataset):
     def __init__(self, volume: np.ndarray, inklabels: np.ndarray, pixels: List[Tuple], subvolume_size: int):
         self.volume = volume
@@ -51,17 +70,23 @@ class SubvolumeDataset(Dataset):
         y, x = self.pixels[idx]
         # no .view like tutorial
         subvolume = self.volume[:,
-                    y - self.subvolume_size : y + self.subvolume_size,
-                    x - self.subvolume_size : x + self.subvolume_size]
-        # 3d notebook had  subvolume = subvolume[np.newaxis, ...] here. Debug with ctrl U
+                    y - self.subvolume_size: y + self.subvolume_size,
+                    x - self.subvolume_size: x + self.subvolume_size]
         subvolume = torch.from_numpy(subvolume).to(torch.float32)
         inklabel = torch.tensor(self.inklabels[y, x], dtype=torch.float32)
         return subvolume, inklabel
 
 
 def create_data_loader(batch_size: int, pixels: List[Tuple], dataset_kwargs: dict, shuffle: bool) -> DataLoader:
+    # dataset_kwargs {"volume": volume, "inklabels": inklabels, "subvolume_size": config["subvolume_size"]}
     dataset = SubvolumeDataset(pixels=pixels, **dataset_kwargs)
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)  # pin_memory=True
+    return data_loader
+
+
+def create_test_data_loader(batch_size: int, volume: np.ndarray, pixels: List[Tuple], subvolume_size: int):
+    dataset = SubvolumeDatasetTest(volume, pixels, subvolume_size)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     return data_loader
 
 
@@ -95,7 +120,8 @@ def train_fn(train_steps: int, data_loader: DataLoader, model: nn.Module, loss_f
     train_loss = 0
     train_total = 0
 
-    for batch_idx, (x, y) in tqdm(enumerate(data_loader), desc='Batches', leave=False):  # x, y are (volume np.ndarray, inklabels: np.ndarray)
+    for batch_idx, (x, y) in tqdm(enumerate(data_loader), total=train_steps, desc='Train Batches', leave=False):
+        # x, y are (volume np.ndarray, inklabels: np.ndarray)
         x = x.to("cuda")
         y = y.to("cuda")
 
@@ -111,7 +137,7 @@ def train_fn(train_steps: int, data_loader: DataLoader, model: nn.Module, loss_f
         loss2 = f.binary_cross_entropy_with_logits(y_hat, y)
         dice = dice_coef_torch(y_hat, y)
 # Todo do i need all of these fuckers?
-        acc = accuracy(y_hat, y, task='binary')
+#         acc = accuracy(y_hat, y, task='binary')
         # acc2 = (y_hat.argmax(dim=-1) == y).float().mean()
 
         train_loss += loss.item()
@@ -124,66 +150,72 @@ def train_fn(train_steps: int, data_loader: DataLoader, model: nn.Module, loss_f
         optimizer.step()
 
         # Report metrics every 25th batch/step
-        if batch_idx % 25 == 0:  # todo only calcuate the extra losses when its a 25 modulo run. save compute
+        if batch_idx % 50 == 0:  # todo only calculate the extra losses when its a modulo run. save compute
             train_auc = roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy())
-            logger.log({"train_loss": train_loss, "train_dice": dice, "train_auc": train_auc, 'train_accuracy': acc})
+            logger.log({"train_loss":  loss.item(), "train_dice": dice, "train_auc": train_auc})  # 'train_accuracy': acc
 
     avg_loss = round((train_loss / train_total) * 100, 2)
-    print(avg_loss)
-    logger.log({"Train Loss": train_loss/train_total, "Train Accuracy": acc, "epoch": epoch})
+    print(f"Average loss for this epoch was:{avg_loss}")
+    # logger.log({"Train Loss": train_loss/train_total, "Train Accuracy": acc, "epoch": epoch})
     # Todo return average losses?
     return None
 
 
 @torch.no_grad()
-def val_fn(val_loader: DataLoader, model: nn.Module, loss_fn: nn.Module, logger) -> dict:
+def val_fn(val_steps: int, val_loader: DataLoader, model: nn.Module, loss_fn: nn.Module, logger) -> dict:
     run_loss = AverageCalc()
+    dice_loss = AverageCalc()
     model.eval()  # Sets the model into evaluation mode
-    y_val = []
-    yhat_val = []
-    test_loss = 0
-    test_total = 0
 
-    for batch_idx, (x, y) in tqdm(enumerate(val_loader), desc='Valid Batches', leave=False):
+    for batch_idx, (x, y) in tqdm(enumerate(val_loader), total=val_steps, desc='Valid Batches', leave=False):
         x = x.to("cuda")
         y = y.to("cuda")
+
+        if batch_idx > val_steps:  # Only do so many train steps.
+            break
 
         y_hat = model(x)  # .squeeze(1) 3D
         loss = loss_fn(y_hat, y)
+        dice = dice_coef_torch(y_hat, y)
 
-        test_loss += loss.item()
         run_loss.update(loss.item(), x.shape[0])
-        test_total += y_hat.size(0)
+        dice_loss.update(dice, x.shape[0])
 
-        y_val.append(y.cpu())
-        yhat_val.append(y_hat.cpu())
-
-    y_val = torch.cat(y_val)  # Concatenates the given sequence of seq tensors in the given dimension
-    yhat_val = torch.cat(yhat_val)
-
-    try:
-        val_auc = roc_auc_score(y_val.numpy(), yhat_val.numpy())
-    except ValueError:
-        val_auc = np.nan
-    logger.log({"Test Loss": test_loss/test_total})  # todo compare to below run_loss.avg?
+        if batch_idx % 50 == 0:
+            # val_auc = roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy())
+            logger.log({"val_loss": run_loss.avg, "val_dice": dice})  # Todo check wandb for these. losses the same?
 
     # Val_dict is what is returned below v
-    logger.log({"val_loss": run_loss.avg, "val_dice": dice_coef_torch(yhat_val, y_val), "val_auc": val_auc})
-    return {"val_loss": run_loss.avg, "val_dice": dice_coef_torch(yhat_val, y_val), "val_auc": val_auc}
+    # logger.log({"val_loss": run_loss.avg, "val_dice": dice_coef_torch(yhat_val, y_val), "val_auc": val_auc})
+    return {"val_loss": run_loss.avg, "val_dice": dice_loss.avg}
 
 
 @torch.no_grad()
-def generate_ink_pred(val_loader: DataLoader, model: nn.Module, val_pixels) -> Tensor:
+def generate_ink_pred(val_loader: DataLoader, model: nn.Module, val_pixels, image_shape) -> Tensor:
     model.eval()  # Sets the model into evaluation mode
-    output = torch.zeros(IMAGE_SHAPE, dtype=torch.float32)
-    for i, (x, y) in enumerate(val_loader):  # Todo add tqdm?
+    output = torch.zeros(image_shape, dtype=torch.float32)
+    for i, (x, y) in tqdm(enumerate(val_loader), total=val_loader.__len__(), desc='Inference Batches', leave=False):
         x = x.to("cuda")
         y = y.to("cuda")
-        batch_size = x.shape[0]
+        batch_size = x.shape[0]  # 400, 10, 0, 60
 
         yhat = model(x)
-        for j, pred in enumerate(yhat):   # Todo add tqdm?
+        for j, pred in enumerate(yhat):
             output[val_pixels[i * batch_size + j]] = pred
+    return output
+
+
+@torch.no_grad()
+def generate_ink_pred_test(test_loader: DataLoader, model: nn.Module, test_pixels, image_shape) -> Tensor:
+    model.eval()  # Sets the model into evaluation mode
+    output = torch.zeros(image_shape, dtype=torch.float32)
+    for i, x in tqdm(enumerate(test_loader), total=len(test_loader), desc='Test Inference Batches', leave=True):
+        x = x.to("cuda")
+        batch_size = x.shape[0]
+
+        yhat = model(x)  # b x.shape [400, 10, 0 , 60] | a x.shape [400, 10, 60, 60]
+        for j, pred in enumerate(yhat):
+            output[test_pixels[i * batch_size + j]] = pred
     return output
 
 
